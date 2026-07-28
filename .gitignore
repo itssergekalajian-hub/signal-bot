@@ -1,0 +1,12 @@
+# Secrets — NEVER commit these
+.env
+
+# Telegram session files (contain login tokens for your account + bot)
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/

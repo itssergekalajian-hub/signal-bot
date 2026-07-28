@@ -1,0 +1,7 @@
+telethon==1.36.0
+requests==2.32.*
+python-dotenv==1.0.*
+solders==0.21.*
+base58==2.1.*
+# optional: only if you enable the LLM intent filter in extractor.py
+# anthropic==0.39.*
