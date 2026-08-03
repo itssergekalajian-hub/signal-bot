@@ -25,7 +25,9 @@ from telethon import Button, TelegramClient, events
 
 import config
 import executor
+import market
 import monitor
+import positions
 from extractor import extract_candidates
 from safety import Verdict, evaluate
 
@@ -117,6 +119,49 @@ async def on_channel_message(event):
         await bot_client.send_message(config.TG_OWNER_ID, header + _format(v), buttons=buttons)
 
 
+async def _positions_report() -> str:
+    """Build the /positions summary: ROI + current value per open holding."""
+    open_pos = positions.open_positions()
+    if not open_pos:
+        return "📭 No open positions."
+
+    lines = ["📊 *Open positions*\n"]
+    total_val = 0.0
+    for p in open_pos:
+        cur = await asyncio.to_thread(market.price_usd, p.address)
+        tokens = p.token_raw / (10 ** p.decimals)
+        val = tokens * cur if cur else 0.0
+        total_val += val
+        roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
+        state = "½ sold @2x" if p.tp1_done else "open"
+        tag = " (dry)" if p.dry_run else ""
+        lines.append(
+            f"• *{p.symbol}* ({p.chain}){tag} — {roi:+.0f}%  ~${val:.2f}  [{state}]\n"
+            f"  entry ${p.entry_price_usd:.6g} → now ${cur:.6g}" if cur
+            else f"• *{p.symbol}* ({p.chain}){tag} — price unavailable  [{state}]"
+        )
+    lines.append(f"\n💰 Total open value: ~${total_val:.2f}")
+    return "\n".join(lines)
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/positions", from_users=config.TG_OWNER_ID))
+async def on_positions(event):
+    await event.reply(await _positions_report())
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/help", from_users=config.TG_OWNER_ID))
+async def on_help(event):
+    await event.reply(
+        "*Commands*\n"
+        "• /positions — your open holdings, ROI, and value\n"
+        "• /help — this message\n\n"
+        f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
+        f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
+        f"${config.BUY_AMOUNT_USD:g}/buy · TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@"
+        f"{config.TAKE_PROFIT_MULT:g}x"
+    )
+
+
 @bot_client.on(events.CallbackQuery)
 async def on_click(event):
     try:
@@ -157,7 +202,8 @@ async def main():
         f"🤖 Online. Mode: *{mode}*.\n"
         f"Watching {config.TG_CHANNEL} (all supported chains).\n"
         f"Buy size ${config.BUY_AMOUNT_USD:g} · Take-profit: sell "
-        f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x."
+        f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x.\n"
+        f"Send /positions anytime · /help for commands."
     )
 
     await asyncio.gather(

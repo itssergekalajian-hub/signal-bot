@@ -88,6 +88,22 @@ At Stage 3, fund each chain's wallet with a **small** amount and native gas
   driven by the channel posting a "take profit" message — these channels call
   entries, not exits. Tune `TAKE_PROFIT_MULT` / `TAKE_PROFIT_SELL_PCT`.
 
+## Telegram commands
+
+DM these to your bot:
+
+- **/positions** — your open holdings: ROI, current value, and whether the 2x
+  trim has fired, plus total open value.
+- **/help** — quick command list and the current mode/settings.
+
+## Gas guard
+
+A buy is skipped when estimated gas would eat too much of the position —
+`gas > MAX_GAS_PCT` of `BUY_AMOUNT_USD` (default 25%), or an optional hard cap
+`MAX_GAS_USD`. It runs in DRY_RUN too, so you'll see `⛽ skipped` messages while
+simulating. This mostly bites on Ethereum mainnet; BSC/Base/Solana rarely trip
+it. **Sells are never gas-guarded** — the bot must always be able to exit.
+
 ## Files
 
 - `main.py` — orchestration (channel reader + auto/confirm buy + monitor task)
@@ -100,6 +116,7 @@ At Stage 3, fund each chain's wallet with a **small** amount and native gas
 - `solana_executor.py` — Jupiter Ultra swaps + balance reads (Solana)
 - `positions.py` — open-position ledger, persisted to `positions.json`
 - `monitor.py` — background loop: re-price positions, sell 50% at 2x
+- `gas.py` — estimate swap gas in USD; gate buys so fees don't eat the position
 - `config.py` — env-driven settings
 
 ## Notes / verify against live APIs
@@ -111,4 +128,5 @@ At Stage 3, fund each chain's wallet with a **small** amount and native gas
   them defensively. Eyeball one real response and adjust thresholds.
 - `positions.json` is your holdings ledger — git-ignored, survives restarts.
   Stop the bot before hand-editing it.
-- Consider a per-day spend cap and a stop-loss (neither is built in yet).
+- Consider a per-day spend cap and a stop-loss (neither is built in yet). Gas
+  guarding and a /positions view are built in.

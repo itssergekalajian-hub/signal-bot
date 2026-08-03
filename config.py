@@ -39,6 +39,15 @@ BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "10"))  # USD per buy, any ch
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
 SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "500"))  # 5% exits
 
+# ── Gas guard: don't let fees eat the position ─────────────────────────
+# Skip a BUY when estimated gas exceeds MAX_GAS_PCT of BUY_AMOUNT_USD, or an
+# optional hard cap MAX_GAS_USD (0 = no absolute cap). Matters mainly on
+# Ethereum mainnet; cheap chains (BSC/Base/Solana) rarely trip it. Sells
+# (take-profit exits) are never gas-guarded — we always want to be able to exit.
+MAX_GAS_PCT    = float(os.getenv("MAX_GAS_PCT", "25"))       # gas < 25% of buy
+MAX_GAS_USD    = float(os.getenv("MAX_GAS_USD", "0"))        # 0 = disabled
+SWAP_GAS_UNITS = int(os.getenv("SWAP_GAS_UNITS", "250000"))  # assumed gas/swap
+
 # ── Take-profit: "sell 50% at 2x / 100% ROI" ───────────────────────────
 TAKE_PROFIT_MULT     = float(os.getenv("TAKE_PROFIT_MULT", "2.0"))
 TAKE_PROFIT_SELL_PCT = float(os.getenv("TAKE_PROFIT_SELL_PCT", "50"))

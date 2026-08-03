@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import chains
 import config
+import gas
 import market
 from swap_result import SwapResult
 
@@ -48,11 +49,17 @@ def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
         return SwapResult(False, f"couldn't price {chain.native_symbol} to size the buy")
     amount_native = amount_usd / nat_price
 
+    # Gas guard — applies in DRY_RUN too, so simulated runs show gas skips.
+    ok, gas_note = gas.check_buy(chain)
+    if not ok:
+        return SwapResult(False, f"⛽ skipped — {gas_note}")
+
     if config.DRY_RUN:
         return SwapResult(
             True,
             f"[DRY_RUN] would buy {address} on {chain.name} with "
-            f"~{amount_native:.6g} {chain.native_symbol} (${amount_usd:.2f}). No tx sent.",
+            f"~{amount_native:.6g} {chain.native_symbol} (${amount_usd:.2f}); {gas_note}. "
+            f"No tx sent.",
             in_amount=int(amount_native * (10 ** 18)),
         )
 
