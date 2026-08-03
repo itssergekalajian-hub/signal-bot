@@ -35,7 +35,7 @@ JUPITER_API_KEY = os.getenv("JUPITER_API_KEY", "")
 # ── Execution ──────────────────────────────────────────────────────────
 DRY_RUN        = _b("DRY_RUN", True)      # true = never actually swaps
 AUTO_TRADE     = _b("AUTO_TRADE", False)  # true = buy on pass; false = Buy/Skip button
-BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "25"))  # USD per buy, any chain
+BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "10"))  # USD per buy, any chain
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
 SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "500"))  # 5% exits
 
