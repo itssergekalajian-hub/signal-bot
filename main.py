@@ -1,4 +1,5 @@
-"""Entry point. Wires the whole detect -> check -> open -> take-profit loop.
+"""Entry point. Wires the whole detect -> resolve -> check -> open -> take-profit
+loop, across any supported chain.
 
 Two Telegram clients share one event loop:
   * user_client (your account) READS the signals channel.
@@ -6,9 +7,13 @@ Two Telegram clients share one event loop:
 
 A background monitor task watches every open position and sells 50% at 2x.
 
+Chain is never assumed: every candidate address is resolved to its real chain
+by the safety layer (via DexScreener), so BSC, ETH, Arbitrum, Solana, etc. are
+all handled by the same path — only the execution adapter differs.
+
 Modes (config / .env):
   * AUTO_TRADE=true  -> a call that clears the safety gate is bought instantly.
-  * AUTO_TRADE=false -> you get a Buy/Skip button to tap (the original flow).
+  * AUTO_TRADE=false -> you get a Buy/Skip button to tap.
   * DRY_RUN=true     -> nothing ever swaps; buys/sells are simulated end to end.
 """
 from __future__ import annotations
@@ -21,7 +26,7 @@ from telethon import Button, TelegramClient, events
 import config
 import executor
 import monitor
-from extractor import extract_mints
+from extractor import extract_candidates
 from safety import Verdict, evaluate
 
 user_client = TelegramClient("user_session", config.TG_API_ID, config.TG_API_HASH)
@@ -29,6 +34,8 @@ bot_client = TelegramClient("bot_session", config.TG_API_ID, config.TG_API_HASH)
 
 # short-lived map: button id -> verdict (cleared once acted on)
 _pending: dict[str, Verdict] = {}
+# de-dupe addresses we've already handled recently (reposted calls)
+_seen: set[str] = set()
 
 
 async def _notify(text: str) -> None:
@@ -45,33 +52,31 @@ def _entry_price(v: Verdict) -> float:
 def _format(v: Verdict) -> str:
     i = v.info
     lines = [
-        f"🪙 *{i.get('symbol') or 'Unknown'}*  `{v.mint}`",
+        f"🪙 *{i.get('symbol') or 'Unknown'}*  ({v.chain})",
+        f"`{v.address}`",
         f"💧 Liquidity: ${i.get('liquidity_usd', 0):,}",
         f"🏷️ Price: {i.get('price_usd', '?')}",
-        f"🛡️ RugCheck score: {i.get('rugcheck_score', '?')}",
     ]
-    if i.get("top_holder_pct") is not None:
-        lines.append(f"👤 Top holder: {i['top_holder_pct']}%")
+    if i.get("buy_tax_pct") is not None:
+        lines.append(f"💸 Tax: buy {i['buy_tax_pct']}% / sell {i.get('sell_tax_pct', '?')}%")
     if i.get("age_min") is not None:
         lines.append(f"⏱️ Pair age: {i['age_min']}m")
-    if i.get("risks"):
-        lines.append(f"⚠️ Flags: {', '.join(i['risks'][:5]) or 'none'}")
     return "\n".join(lines)
 
 
 async def _open_trade(v: Verdict) -> None:
-    """Buy the mint, record the position for take-profit tracking, and report."""
-    await _notify(f"⏳ Opening {v.info.get('symbol') or v.mint}…")
-    res = await asyncio.to_thread(executor.buy, v.mint, config.BUY_AMOUNT_SOL)
+    """Buy the token, record the position for take-profit tracking, and report."""
+    await _notify(f"⏳ Opening {v.info.get('symbol') or v.address} on {v.chain}…")
+    res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
 
     if not res.ok:
-        await _notify(f"❌ Buy failed for `{v.mint}`: {res.detail}")
+        await _notify(f"❌ Buy failed for `{v.address}` ({v.chain}): {res.detail}")
         return
 
     pos = monitor.record_buy(
-        v.mint, v.info.get("symbol") or "?", config.BUY_AMOUNT_SOL, _entry_price(v), res
+        v.address, v.chain, v.info.get("symbol") or "?",
+        config.BUY_AMOUNT_USD, _entry_price(v), res,
     )
-    tail = ""
     if pos is None:
         tail = "\n⚠️ No entry price — take-profit tracking disabled for this one."
     else:
@@ -82,28 +87,30 @@ async def _open_trade(v: Verdict) -> None:
 
 @user_client.on(events.NewMessage(chats=[config.TG_CHANNEL]))
 async def on_channel_message(event):
-    mints = extract_mints(event.raw_text)
-    for mint in mints:
-        # Safety calls are blocking HTTP -> run off the event loop
-        v = await asyncio.to_thread(evaluate, mint)
+    for address in extract_candidates(event.raw_text):
+        if address in _seen:
+            continue
+        _seen.add(address)
+
+        # Resolve chain + run the safety gate (blocking HTTP -> off the loop).
+        v = await asyncio.to_thread(evaluate, address)
 
         if not v.passed:
             await bot_client.send_message(
                 config.TG_OWNER_ID,
-                f"⛔ Skipped `{mint}`\n" + "\n".join(f"• {r}" for r in v.reasons),
+                f"⛔ Skipped `{address}`" + (f" ({v.chain})" if v.chain else "") +
+                "\n" + "\n".join(f"• {r}" for r in v.reasons),
             )
             continue
 
         if config.AUTO_TRADE:
-            # What you asked for: open the call automatically, no tap.
             await _open_trade(v)
             continue
 
-        # Manual mode: DM a Buy/Skip button to tap.
         sid = secrets.token_hex(4)
         _pending[sid] = v
         buttons = [[
-            Button.inline(f"✅ Buy {config.BUY_AMOUNT_SOL} SOL", f"buy:{sid}".encode()),
+            Button.inline(f"✅ Buy ${config.BUY_AMOUNT_USD:g}", f"buy:{sid}".encode()),
             Button.inline("❌ Skip", f"skip:{sid}".encode()),
         ]]
         header = "✅ *Passed safety checks* — your call:\n\n"
@@ -126,10 +133,11 @@ async def on_click(event):
         return
 
     await event.edit("⏳ Buying…")
-    res = await asyncio.to_thread(executor.buy, v.mint, config.BUY_AMOUNT_SOL)
+    res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
     if res.ok:
         monitor.record_buy(
-            v.mint, v.info.get("symbol") or "?", config.BUY_AMOUNT_SOL, _entry_price(v), res
+            v.address, v.chain, v.info.get("symbol") or "?",
+            config.BUY_AMOUNT_USD, _entry_price(v), res,
         )
         await event.edit(f"✅ {res.detail}\n📈 Tracking for {config.TAKE_PROFIT_MULT:g}x "
                          f"→ will sell {config.TAKE_PROFIT_SELL_PCT:.0f}%.")
@@ -141,15 +149,15 @@ async def main():
     await bot_client.start(bot_token=config.TG_BOT_TOKEN)
     await user_client.start()  # first run prompts for phone + code
 
-    dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real SOL"
+    dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real funds"
     auto = "AUTO buy" if config.AUTO_TRADE else "manual confirm"
     mode = f"{dry} · {auto}"
     print(f"Bot running: {mode}. Watching {config.TG_CHANNEL}.")
     await _notify(
         f"🤖 Online. Mode: *{mode}*.\n"
-        f"Watching {config.TG_CHANNEL}.\n"
-        f"Take-profit: sell {config.TAKE_PROFIT_SELL_PCT:.0f}% at "
-        f"{config.TAKE_PROFIT_MULT:g}x."
+        f"Watching {config.TG_CHANNEL} (all supported chains).\n"
+        f"Buy size ${config.BUY_AMOUNT_USD:g} · Take-profit: sell "
+        f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x."
     )
 
     await asyncio.gather(

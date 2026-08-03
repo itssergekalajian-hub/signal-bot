@@ -1,145 +1,97 @@
-"""Execute swaps through Jupiter's Ultra API (buy and sell).
+"""Execution dispatcher — routes a trade to the right chain's adapter.
 
-Ultra is RPC-less for swapping: you GET an /order (which returns an unsigned
-base64 transaction + requestId), sign it locally with your keypair, then POST
-it to /execute and Jupiter handles priority fees, slippage, and landing the tx.
+The rest of the bot never imports a chain-specific adapter directly; it calls
+executor.buy / executor.sell / executor.token_balance with the chain the market
+layer resolved, and this module dispatches:
 
-Flow (buy = SOL -> token, sell = token -> SOL):
-  GET  {base}/ultra/v1/order?inputMint=..&outputMint=..&amount=<raw>&taker=<pubkey>
-  ->   sign transaction locally
-  POST {base}/ultra/v1/execute  { signedTransaction, requestId }
+    solana  -> solana_executor  (Jupiter Ultra)
+    evm     -> evm_executor     (0x aggregator, any EVM chain)
+
+Position sizing is in USD (BUY_AMOUNT_USD) so one setting works on every chain:
+we price the chain's native coin via DexScreener and convert to a native amount
+before handing off. DRY_RUN is handled here, once, for all chains.
 """
 from __future__ import annotations
 
-import base64
-from dataclasses import dataclass
-
-import requests
-from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
-
+import chains
 import config
+import market
+from swap_result import SwapResult
 
-_TIMEOUT = 20
-
-
-@dataclass
-class SwapResult:
-    ok: bool
-    detail: str
-    signature: str | None = None
-    in_amount: int | None = None    # raw base units sent
-    out_amount: int | None = None   # raw base units received (from the order quote)
+# Re-export for back-compat with older imports.
+__all__ = ["SwapResult", "buy", "sell", "token_balance", "wallet_address", "native_price"]
 
 
-# Kept as an alias so older imports of BuyResult still work.
-BuyResult = SwapResult
+def native_price(chain: chains.Chain) -> float | None:
+    """USD price of the chain's native coin (via its wrapped-native token)."""
+    return market.price_usd(chain.wrapped_native)
 
 
-def _keypair() -> Keypair:
-    return Keypair.from_base58_string(config.SOLANA_PRIVATE_KEY)
-
-
-def wallet_pubkey() -> str | None:
-    """Public address of the configured wallet, or None if no key is set."""
-    if not config.SOLANA_PRIVATE_KEY:
+def wallet_address(chain_key: str) -> str | None:
+    chain = chains.get(chain_key)
+    if not chain:
         return None
-    return str(_keypair().pubkey())
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.wallet_address()
+    import evm_executor
+    return evm_executor.wallet_address()
 
 
-def _headers() -> dict:
-    h = {"Content-Type": "application/json"}
-    if config.JUPITER_API_KEY:
-        h["x-api-key"] = config.JUPITER_API_KEY
-    return h
+def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
+    chain = chains.get(chain_key)
+    if not chain:
+        return SwapResult(False, f"unsupported chain '{chain_key}'")
 
-
-def _swap(input_mint: str, output_mint: str, raw_amount: int, slippage_bps: int) -> SwapResult:
-    """Core SOL<->token swap. `raw_amount` is in the input token's base units."""
-    if not config.SOLANA_PRIVATE_KEY:
-        return SwapResult(False, "no SOLANA_PRIVATE_KEY configured")
-
-    kp = _keypair()
-    taker = str(kp.pubkey())
-
-    # 1) order
-    try:
-        order = requests.get(
-            f"{config.JUPITER_BASE}/ultra/v1/order",
-            params={
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": raw_amount,
-                "taker": taker,
-                "slippageBps": slippage_bps,
-            },
-            headers=_headers(),
-            timeout=_TIMEOUT,
-        ).json()
-    except Exception as e:  # noqa: BLE001
-        return SwapResult(False, f"order request failed: {e}")
-
-    tx_b64 = order.get("transaction")
-    request_id = order.get("requestId")
-    if not tx_b64 or not request_id:
-        return SwapResult(False, f"no routable order: {order.get('error') or order}")
-
-    out_amount = order.get("outAmount")
-    out_amount = int(out_amount) if out_amount is not None else None
-
-    # 2) sign locally
-    try:
-        unsigned = VersionedTransaction.from_bytes(base64.b64decode(tx_b64))
-        signed = VersionedTransaction(unsigned.message, [kp])
-        signed_b64 = base64.b64encode(bytes(signed)).decode()
-    except Exception as e:  # noqa: BLE001
-        return SwapResult(False, f"signing failed: {e}")
-
-    # 3) execute
-    try:
-        res = requests.post(
-            f"{config.JUPITER_BASE}/ultra/v1/execute",
-            json={"signedTransaction": signed_b64, "requestId": request_id},
-            headers=_headers(),
-            timeout=_TIMEOUT,
-        ).json()
-    except Exception as e:  # noqa: BLE001
-        return SwapResult(False, f"execute request failed: {e}")
-
-    status = str(res.get("status", "")).lower()
-    sig = res.get("signature")
-    if status == "success" or res.get("code") == 0:
-        return SwapResult(True, f"filled — https://solscan.io/tx/{sig}", sig,
-                          in_amount=raw_amount, out_amount=out_amount)
-    return SwapResult(False, f"execute returned: {res}", sig)
-
-
-def buy(mint: str, amount_sol: float) -> SwapResult:
-    """Buy `mint` by swapping `amount_sol` of SOL into it."""
-    lamports = int(amount_sol * config.LAMPORTS)
+    nat_price = native_price(chain)
+    if not nat_price:
+        return SwapResult(False, f"couldn't price {chain.native_symbol} to size the buy")
+    amount_native = amount_usd / nat_price
 
     if config.DRY_RUN:
         return SwapResult(
             True,
-            f"[DRY_RUN] would buy {mint} with {amount_sol} SOL "
-            f"({lamports} lamports). No transaction sent.",
-            in_amount=lamports,
+            f"[DRY_RUN] would buy {address} on {chain.name} with "
+            f"~{amount_native:.6g} {chain.native_symbol} (${amount_usd:.2f}). No tx sent.",
+            in_amount=int(amount_native * (10 ** 18)),
         )
 
-    return _swap(config.WSOL_MINT, mint, lamports, config.SLIPPAGE_BPS)
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.buy(address, amount_native)
+    import evm_executor
+    return evm_executor.buy(chain, address, amount_native)
 
 
-def sell(mint: str, raw_token_amount: int) -> SwapResult:
-    """Sell `raw_token_amount` (base units) of `mint` back into SOL."""
-    if raw_token_amount <= 0:
+def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
+    chain = chains.get(chain_key)
+    if not chain:
+        return SwapResult(False, f"unsupported chain '{chain_key}'")
+    if raw_amount <= 0:
         return SwapResult(False, "nothing to sell (zero balance)")
 
     if config.DRY_RUN:
         return SwapResult(
             True,
-            f"[DRY_RUN] would sell {raw_token_amount} raw units of {mint} "
-            f"back to SOL. No transaction sent.",
-            in_amount=raw_token_amount,
+            f"[DRY_RUN] would sell {raw_amount} raw units of {address} on "
+            f"{chain.name} back to {chain.native_symbol}. No tx sent.",
+            in_amount=raw_amount,
         )
 
-    return _swap(mint, config.WSOL_MINT, raw_token_amount, config.SELL_SLIPPAGE_BPS)
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.sell(address, raw_amount)
+    import evm_executor
+    return evm_executor.sell(chain, address, raw_amount)
+
+
+def token_balance(address: str, chain_key: str) -> tuple[int, int]:
+    """(raw_amount, decimals) held on `chain_key`; (0, 0) if none."""
+    chain = chains.get(chain_key)
+    if not chain:
+        return 0, 0
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.token_balance(address)
+    import evm_executor
+    return evm_executor.token_balance(chain, address)

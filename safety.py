@@ -1,118 +1,138 @@
-"""Safety layer. Runs BEFORE you ever see a Buy button.
+"""Safety layer. Runs BEFORE any buy, on whatever chain the token lives on.
 
-Two independent sources:
-  - RugCheck  (api.rugcheck.xyz/v1) — mint/freeze authority, holder concentration,
-    known risk flags, an overall risk score.
-  - DexScreener (api.dexscreener.com) — liquidity, volume, pair age, price.
+Two multichain sources:
+  - DexScreener (via market.lookup) — resolves the chain, then gives liquidity,
+    price and pair age. Works for every supported chain.
+  - GoPlus Security — honeypot / buy-sell tax / mintable / holder checks.
+    EVM:    /token_security/<numeric_chain_id>
+    Solana: /solana/token_security
 
-Philosophy: FAIL CLOSED. If a check errors or data is missing, treat the token
-as unsafe rather than waving it through. A missed opportunity costs nothing; a
-honeypot costs your whole position.
+Philosophy: FAIL CLOSED on the things that make a token untradeable — no
+liquidity, no market, or a confirmed honeypot. For "data simply not indexed
+yet" (common on brand-new calls you actually want to ape), we do NOT fail
+closed unless STRICT_SAFETY is set, so fresh calls still reach you.
 """
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 
 import requests
 
+import chains
 import config
+import market
 
 _TIMEOUT = 8
+_GOPLUS = "https://api.gopluslabs.io/api/v1"
 
 
 @dataclass
 class Verdict:
-    mint: str
-    passed: bool
+    address: str
+    chain: str = ""
+    passed: bool = True
     reasons: list[str] = field(default_factory=list)   # why it failed
-    info: dict = field(default_factory=dict)           # display data
+    info: dict = field(default_factory=dict)            # display data
 
 
-def _rugcheck(mint: str) -> dict:
-    url = f"https://api.rugcheck.xyz/v1/tokens/{mint}/report/summary"
-    r = requests.get(url, timeout=_TIMEOUT)
+def _goplus_evm(numeric_chain_id: int, address: str) -> dict | None:
+    url = f"{_GOPLUS}/token_security/{numeric_chain_id}"
+    r = requests.get(url, params={"contract_addresses": address}, timeout=_TIMEOUT)
     r.raise_for_status()
-    return r.json()
+    result = (r.json().get("result") or {})
+    return result.get(address.lower())
 
 
-def _dexscreener(mint: str) -> dict:
-    url = f"https://api.dexscreener.com/latest/dex/tokens/{mint}"
-    r = requests.get(url, timeout=_TIMEOUT)
+def _goplus_solana(address: str) -> dict | None:
+    url = f"{_GOPLUS}/solana/token_security"
+    r = requests.get(url, params={"contract_addresses": address}, timeout=_TIMEOUT)
     r.raise_for_status()
-    data = r.json()
-    pairs = data.get("pairs") or []
-    if not pairs:
-        return {}
-    # Use the deepest-liquidity pair as the reference market
-    return max(pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0)
+    result = (r.json().get("result") or {})
+    return result.get(address)
 
 
-def evaluate(mint: str) -> Verdict:
-    v = Verdict(mint=mint, passed=True)
-
-    # ---- RugCheck ----
+def _f(v, default=0.0) -> float:
     try:
-        rc = _rugcheck(mint)
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _check_security(v: Verdict, chain: chains.Chain) -> None:
+    """Populate v with GoPlus findings; reject on hard danger flags."""
+    try:
+        if chain.family == "evm":
+            data = _goplus_evm(chain.evm_chain_id, v.address)
+        else:
+            data = _goplus_solana(v.address)
     except Exception as e:  # noqa: BLE001
+        if config.STRICT_SAFETY:
+            v.passed = False
+            v.reasons.append(f"security check unavailable ({e}) — failing closed")
+        return
+
+    if not data:
+        if config.STRICT_SAFETY:
+            v.passed = False
+            v.reasons.append("no security data (token too new?) — failing closed")
+        return
+
+    # Field names differ a little across EVM/Solana; read defensively.
+    honeypot = str(data.get("is_honeypot", data.get("honeypot", "0"))) == "1"
+    buy_tax = _f(data.get("buy_tax")) * 100
+    sell_tax = _f(data.get("sell_tax")) * 100
+    mintable = str(data.get("is_mintable", "0")) == "1"
+
+    v.info["buy_tax_pct"] = round(buy_tax, 1)
+    v.info["sell_tax_pct"] = round(sell_tax, 1)
+
+    if honeypot or str(data.get("cannot_sell_all", "0")) == "1":
         v.passed = False
-        v.reasons.append(f"RugCheck unavailable ({e}) — failing closed")
-        return v
-
-    score = rc.get("score_normalised", rc.get("score"))
-    v.info["rugcheck_score"] = score
-    risks = rc.get("risks") or []
-    v.info["risks"] = [r.get("name") for r in risks if isinstance(r, dict)]
-
-    if score is not None and score > config.MAX_RUGCHECK_SCORE:
+        v.reasons.append("honeypot — you couldn't sell")
+    if sell_tax > config.MAX_SELL_TAX_PCT:
         v.passed = False
-        v.reasons.append(f"RugCheck score {score} > {config.MAX_RUGCHECK_SCORE}")
-
-    # Authority flags — names vary, so match loosely against risk labels
-    labels = " ".join(v.info["risks"]).lower()
-    if config.REQ_MINT_REVOKED and "mint authority" in labels:
+        v.reasons.append(f"sell tax {sell_tax:.0f}% > {config.MAX_SELL_TAX_PCT:.0f}%")
+    if buy_tax > config.MAX_BUY_TAX_PCT:
+        v.passed = False
+        v.reasons.append(f"buy tax {buy_tax:.0f}% > {config.MAX_BUY_TAX_PCT:.0f}%")
+    if config.REQ_MINT_REVOKED and mintable:
         v.passed = False
         v.reasons.append("mint authority still enabled")
-    if config.REQ_FREEZE_REVOKED and "freeze authority" in labels:
-        v.passed = False
-        v.reasons.append("freeze authority still enabled")
 
-    # Top holder concentration if RugCheck exposes it
-    top = rc.get("topHolders") or []
-    if top:
-        top_pct = max((h.get("pct") or 0) for h in top)
-        v.info["top_holder_pct"] = round(top_pct, 1)
-        if top_pct > config.MAX_TOP_HOLDER_PCT:
-            v.passed = False
-            v.reasons.append(f"top holder {top_pct:.0f}% > {config.MAX_TOP_HOLDER_PCT:.0f}%")
 
-    # ---- DexScreener ----
-    try:
-        pair = _dexscreener(mint)
-    except Exception as e:  # noqa: BLE001
+def evaluate(address: str) -> Verdict:
+    v = Verdict(address=address)
+
+    # ---- Resolve chain + market (fail closed if nothing trades) ----
+    m = market.lookup(address)
+    if not m:
         v.passed = False
-        v.reasons.append(f"DexScreener unavailable ({e}) — failing closed")
+        v.reasons.append("no market found on any chain (can't price / can't trade)")
         return v
 
-    if not pair:
+    v.chain = m.chain
+    v.info.update(
+        symbol=m.symbol,
+        price_usd=m.price_usd,
+        liquidity_usd=round(m.liquidity_usd),
+        age_min=round(m.age_min) if m.age_min is not None else None,
+    )
+
+    chain = chains.get(m.chain)
+    if not chain:
         v.passed = False
-        v.reasons.append("no DEX pair found (nothing to trade / can't price)")
+        v.reasons.append(f"chain '{m.chain}' not supported by this bot")
         return v
 
-    liq = (pair.get("liquidity") or {}).get("usd") or 0
-    v.info["liquidity_usd"] = round(liq)
-    v.info["symbol"] = (pair.get("baseToken") or {}).get("symbol")
-    v.info["price_usd"] = pair.get("priceUsd")
-    if liq < config.MIN_LIQUIDITY_USD:
+    if m.liquidity_usd < config.MIN_LIQUIDITY_USD:
         v.passed = False
-        v.reasons.append(f"liquidity ${liq:,.0f} < ${config.MIN_LIQUIDITY_USD:,.0f}")
+        v.reasons.append(f"liquidity ${m.liquidity_usd:,.0f} < ${config.MIN_LIQUIDITY_USD:,.0f}")
 
-    created_ms = pair.get("pairCreatedAt")
-    if created_ms:
-        age_min = (time.time() - created_ms / 1000) / 60
-        v.info["age_min"] = round(age_min)
-        if age_min < config.MIN_PAIR_AGE_MIN:
-            v.passed = False
-            v.reasons.append(f"pair age {age_min:.0f}m < {config.MIN_PAIR_AGE_MIN:.0f}m")
+    if m.age_min is not None and m.age_min < config.MIN_PAIR_AGE_MIN:
+        v.passed = False
+        v.reasons.append(f"pair age {m.age_min:.0f}m < {config.MIN_PAIR_AGE_MIN:.0f}m")
+
+    # ---- Token security (honeypot / taxes / mintable) ----
+    _check_security(v, chain)
 
     return v

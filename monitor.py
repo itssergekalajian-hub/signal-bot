@@ -1,14 +1,14 @@
 """Take-profit monitor: sell 50% of a position once it reaches 2x (100% ROI).
 
-Runs as a background asyncio task alongside the Telegram clients. Every
-POLL_INTERVAL_SEC it re-prices every open position via DexScreener and, when
-current/entry >= TAKE_PROFIT_MULT, sells TAKE_PROFIT_SELL_PCT of the tokens
-back to SOL — exactly once per position (guarded by `tp1_done`). The remainder
+Runs as a background asyncio task. Every POLL_INTERVAL_SEC it re-prices every
+open position via DexScreener (chain-agnostic) and, when current/entry >=
+TAKE_PROFIT_MULT, sells TAKE_PROFIT_SELL_PCT of the tokens back to the chain's
+native coin — exactly once per position (guarded by `tp1_done`). The remainder
 is left running as a moonbag.
 
-The rule is deliberately simple and local: it does NOT wait for the channel to
-post a "take profit" message. "As per the signal channel" here means it mirrors
-the channel's usual 2x/50% guidance as a fixed, configurable rule you control.
+The rule is a fixed, configurable local rule, not driven by the channel posting
+"take profit" — the channels this targets don't send explicit exits, they just
+call entries. Change TAKE_PROFIT_MULT / TAKE_PROFIT_SELL_PCT to taste.
 """
 from __future__ import annotations
 
@@ -18,48 +18,39 @@ import time
 import config
 import executor
 import positions
-from prices import price_usd
+from market import price_usd
 
 
-def record_buy(mint: str, symbol: str, amount_sol: float,
+def record_buy(address: str, chain: str, symbol: str, amount_usd: float,
                entry_price_usd: float, result: executor.SwapResult) -> positions.Position | None:
     """Persist a freshly-opened position so the monitor can track it.
 
     Real mode: read the actual on-chain balance + decimals we now hold.
-    Dry run:   estimate token amount from the SOL/USD price so the take-profit
-               math still demonstrates end to end without touching a wallet.
+    Dry run:   estimate token amount from entry price so the take-profit math
+               still demonstrates end to end without touching a wallet.
     """
     if not entry_price_usd or entry_price_usd <= 0:
         return None  # can't compute ROI without an entry price
 
-    decimals = 6
+    decimals = 9 if chain == "solana" else 18
     token_raw = 0
 
     if config.DRY_RUN:
-        sol_usd = price_usd(config.WSOL_MINT) or 0.0
-        if sol_usd:
-            tokens_ui = (amount_sol * sol_usd) / entry_price_usd
-            token_raw = int(tokens_ui * (10 ** decimals))
+        tokens_ui = amount_usd / entry_price_usd
+        token_raw = int(tokens_ui * (10 ** decimals))
     else:
-        owner = executor.wallet_pubkey()
-        if owner:
-            try:
-                import solana_rpc
-                token_raw, dec = solana_rpc.token_balance(owner, mint)
-                if dec:
-                    decimals = dec
-            except Exception:  # noqa: BLE001
-                token_raw = result.out_amount or 0  # fall back to the quote
+        try:
+            token_raw, dec = executor.token_balance(address, chain)
+            if dec:
+                decimals = dec
+        except Exception:  # noqa: BLE001
+            token_raw = result.out_amount or 0
 
     pos = positions.Position(
-        mint=mint,
-        symbol=symbol or "?",
-        entry_price_usd=entry_price_usd,
-        amount_sol=amount_sol,
-        token_raw=token_raw,
-        decimals=decimals,
-        opened_at=time.time(),
-        dry_run=config.DRY_RUN,
+        address=address, chain=chain, symbol=symbol or "?",
+        entry_price_usd=entry_price_usd, amount_usd=amount_usd,
+        token_raw=token_raw, decimals=decimals,
+        opened_at=time.time(), dry_run=config.DRY_RUN,
     )
     positions.add(pos)
     return pos
@@ -67,18 +58,13 @@ def record_buy(mint: str, symbol: str, amount_sol: float,
 
 def _sell_amount(pos: positions.Position) -> int:
     """How many raw tokens to sell for the take-profit trim."""
-    if config.DRY_RUN:
-        held = pos.token_raw
-    else:
-        owner = executor.wallet_pubkey()
-        held = pos.token_raw
-        if owner:
-            try:
-                import solana_rpc
-                live, _ = solana_rpc.token_balance(owner, pos.mint)
-                held = live  # on-chain balance is the source of truth
-            except Exception:  # noqa: BLE001
-                pass
+    held = pos.token_raw
+    if not config.DRY_RUN:
+        try:
+            live, _ = executor.token_balance(pos.address, pos.chain)
+            held = live  # on-chain balance is the source of truth
+        except Exception:  # noqa: BLE001
+            pass
     return int(held * (config.TAKE_PROFIT_SELL_PCT / 100.0))
 
 
@@ -86,7 +72,7 @@ async def _check_once(notify) -> None:
     for pos in positions.open_positions():
         if pos.tp1_done:
             continue
-        current = await asyncio.to_thread(price_usd, pos.mint)
+        current = await asyncio.to_thread(price_usd, pos.address)
         if current is None:
             continue
 
@@ -96,21 +82,20 @@ async def _check_once(notify) -> None:
 
         sell_raw = _sell_amount(pos)
         if sell_raw <= 0:
-            positions.update(pos.mint, pos.opened_at, tp1_done=True,
+            positions.update(pos.address, pos.opened_at, tp1_done=True,
                              notes="TP reached but no balance to sell")
             continue
 
         await notify(
-            f"🎯 *Take-profit hit* {pos.symbol} `{pos.mint}`\n"
+            f"🎯 *Take-profit hit* {pos.symbol} ({pos.chain}) `{pos.address}`\n"
             f"{ratio:.2f}x (entry ${pos.entry_price_usd:.6g} → ${current:.6g})\n"
             f"Selling {config.TAKE_PROFIT_SELL_PCT:.0f}%…"
         )
-        res = await asyncio.to_thread(executor.sell, pos.mint, sell_raw)
+        res = await asyncio.to_thread(executor.sell, pos.address, pos.chain, sell_raw)
 
         if res.ok:
             positions.update(
-                pos.mint, pos.opened_at,
-                tp1_done=True,
+                pos.address, pos.opened_at, tp1_done=True,
                 token_raw=max(pos.token_raw - sell_raw, 0),
                 notes=f"TP1 sold {config.TAKE_PROFIT_SELL_PCT:.0f}% at {ratio:.2f}x",
             )

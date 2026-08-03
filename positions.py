@@ -20,10 +20,11 @@ _LOCK_NOTE = "edited while the bot runs? stop the bot first — it rewrites this
 
 @dataclass
 class Position:
-    mint: str
+    address: str                    # token contract / mint
+    chain: str                      # resolved chain, e.g. "bsc", "solana"
     symbol: str
     entry_price_usd: float          # USD price at buy time
-    amount_sol: float               # SOL spent opening it
+    amount_usd: float               # USD spent opening it
     token_raw: int                  # base-unit tokens acquired (dry-run estimate or quote)
     decimals: int
     opened_at: float                # unix seconds
@@ -68,11 +69,11 @@ def open_positions() -> list[Position]:
     return [p for p in load() if p.token_raw > 0]
 
 
-def update(mint: str, opened_at: float, **changes) -> None:
-    """Update the single position identified by (mint, opened_at)."""
+def update(address: str, opened_at: float, **changes) -> None:
+    """Update the single position identified by (address, opened_at)."""
     positions = load()
     for p in positions:
-        if p.mint == mint and p.opened_at == opened_at:
+        if p.address == address and p.opened_at == opened_at:
             for k, v in changes.items():
                 setattr(p, k, v)
     save(positions)
