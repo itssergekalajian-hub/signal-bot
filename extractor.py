@@ -47,6 +47,20 @@ def _is_solana_mint(s: str) -> bool:
         return False
 
 
+def _dewrap(text: str) -> str:
+    """Stitch an EVM address a Telegram client wrapped across lines/spaces.
+
+    Many "NEW CALL" posts show the contract as `CA:\n0x1234…\n5678…`; the break
+    is display wrapping, but it can be a real newline in the text. Scoped to
+    0x-prefixed hex runs so it never merges unrelated words.
+    """
+    out, prev = text, None
+    while out != prev:
+        prev = out
+        out = re.sub(r"(0x[0-9a-fA-F]+)\s+([0-9a-fA-F]+)", r"\1\2", out)
+    return out
+
+
 def extract_candidates(text: str) -> list[str]:
     """Return de-duplicated candidate addresses (EVM + Solana) from a message."""
     if not text or _NOISE.search(text):
@@ -54,11 +68,13 @@ def extract_candidates(text: str) -> list[str]:
 
     found: list[str] = []
 
-    # EVM first (unambiguous), lower-cased so repeats dedupe across messages.
-    for a in _EVM.findall(text):
-        a = a.lower()
-        if a not in found:
-            found.append(a)
+    # EVM: scan the text as-is AND a de-wrapped copy, so addresses split across
+    # two lines (common in "CA:\n0x…" call posts) are still caught.
+    for source in (text, _dewrap(text)):
+        for a in _EVM.findall(source):
+            a = a.lower()
+            if a not in found:
+                found.append(a)
 
     # Solana mints: base58, must decode to 32 bytes, and not be an EVM 0x-string.
     for cand in _B58.findall(text):
