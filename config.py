@@ -11,7 +11,17 @@ def _b(name: str, default: bool) -> bool:
 # Telegram — reader (user account)
 TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH = os.getenv("TG_API_HASH", "")
-TG_CHANNEL  = os.getenv("TG_CHANNEL", "")
+
+def _channel(v: str):
+    """A public channel is '@name'; a private one is a numeric id like
+    -1001234567890. Return an int for numeric ids so Telethon resolves them."""
+    v = (v or "").strip()
+    try:
+        return int(v)
+    except ValueError:
+        return v
+
+TG_CHANNEL  = _channel(os.getenv("TG_CHANNEL", ""))
 
 # Telegram — confirm/status bot
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")
