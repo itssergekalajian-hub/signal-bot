@@ -88,7 +88,12 @@ def _send(w3, acct, chain: chains.Chain, tx_fields: dict) -> str:
     tx["gasPrice"] = int(tx_fields.get("gasPrice") or w3.eth.gas_price)
 
     signed = acct.sign_transaction(tx)
-    h = w3.eth.send_raw_transaction(signed.raw_transaction)
+    # eth-account renamed this attribute (rawTransaction -> raw_transaction);
+    # support both so we work across library versions.
+    raw = getattr(signed, "raw_transaction", None)
+    if raw is None:
+        raw = signed.rawTransaction
+    h = w3.eth.send_raw_transaction(raw)
     w3.eth.wait_for_transaction_receipt(h, timeout=180)
     return h.hex()
 
@@ -109,17 +114,16 @@ def _approve_if_needed(w3, acct, chain: chains.Chain, token: str, quote: dict) -
 def buy(chain: chains.Chain, address: str, amount_native: float) -> SwapResult:
     if not config.EVM_PRIVATE_KEY:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
-    w3, acct = _w3(chain), _account()
-    sell_amount = int(amount_native * (10 ** 18))  # all supported natives are 18-dec
-
-    q = _quote(chain, chains.EVM_NATIVE, address, sell_amount, acct.address, config.SLIPPAGE_BPS)
-    tx_fields = q.get("transaction")
-    if not tx_fields:
-        return SwapResult(False, f"no route: {q.get('reason') or q.get('message') or q}")
     try:
+        w3, acct = _w3(chain), _account()
+        sell_amount = int(amount_native * (10 ** 18))  # all supported natives are 18-dec
+        q = _quote(chain, chains.EVM_NATIVE, address, sell_amount, acct.address, config.SLIPPAGE_BPS)
+        tx_fields = q.get("transaction")
+        if not tx_fields:
+            return SwapResult(False, f"no route: {q.get('reason') or q.get('message') or q}")
         txh = _send(w3, acct, chain, tx_fields)
-    except Exception as e:  # noqa: BLE001
-        return SwapResult(False, f"buy tx failed: {e}")
+    except Exception as e:  # noqa: BLE001 — surface any failure as a clean result
+        return SwapResult(False, f"buy failed: {e}")
     out = q.get("buyAmount")
     return SwapResult(True, f"filled — {chain.explorer_tx}{txh}", txh,
                       out_amount=int(out) if out else None)
@@ -130,17 +134,16 @@ def sell(chain: chains.Chain, address: str, raw_amount: int) -> SwapResult:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
     if raw_amount <= 0:
         return SwapResult(False, "nothing to sell (zero balance)")
-    w3, acct = _w3(chain), _account()
-
-    q = _quote(chain, address, chains.EVM_NATIVE, raw_amount, acct.address, config.SELL_SLIPPAGE_BPS)
-    tx_fields = q.get("transaction")
-    if not tx_fields:
-        return SwapResult(False, f"no route: {q.get('reason') or q.get('message') or q}")
     try:
+        w3, acct = _w3(chain), _account()
+        q = _quote(chain, address, chains.EVM_NATIVE, raw_amount, acct.address, config.SELL_SLIPPAGE_BPS)
+        tx_fields = q.get("transaction")
+        if not tx_fields:
+            return SwapResult(False, f"no route: {q.get('reason') or q.get('message') or q}")
         _approve_if_needed(w3, acct, chain, address, q)
         txh = _send(w3, acct, chain, tx_fields)
-    except Exception as e:  # noqa: BLE001
-        return SwapResult(False, f"sell tx failed: {e}")
+    except Exception as e:  # noqa: BLE001 — surface any failure as a clean result
+        return SwapResult(False, f"sell failed: {e}")
     return SwapResult(True, f"filled — {chain.explorer_tx}{txh}", txh)
 
 

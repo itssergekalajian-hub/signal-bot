@@ -69,7 +69,11 @@ def _format(v: Verdict) -> str:
 async def _open_trade(v: Verdict) -> None:
     """Buy the token, record the position for take-profit tracking, and report."""
     await _notify(f"⏳ Opening {v.info.get('symbol') or v.address} on {v.chain}…")
-    res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
+    try:
+        res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
+    except Exception as e:  # noqa: BLE001
+        await _notify(f"❌ Buy errored for `{v.address}` ({v.chain}): {e}")
+        return
 
     if not res.ok:
         await _notify(f"❌ Buy failed for `{v.address}` ({v.chain}): {res.detail}")
@@ -178,7 +182,11 @@ async def on_click(event):
         return
 
     await event.edit("⏳ Buying…")
-    res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
+    try:
+        res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
+    except Exception as e:  # noqa: BLE001
+        await event.edit(f"❌ Buy errored: {e}")
+        return
     if res.ok:
         monitor.record_buy(
             v.address, v.chain, v.info.get("symbol") or "?",
