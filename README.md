@@ -94,6 +94,8 @@ DM these to your bot:
 
 - **/positions** — your open holdings: ROI, current value, and whether the 2x
   trim has fired, plus total open value.
+- **/sell** — lists each open position with **Sell 50% / Sell 100%** buttons;
+  tap to sell on demand (uses your live on-chain balance in live mode).
 - **/help** — quick command list and the current mode/settings.
 
 ## Gas guard

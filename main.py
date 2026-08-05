@@ -36,6 +36,8 @@ bot_client = TelegramClient("bot_session", config.TG_API_ID, config.TG_API_HASH)
 
 # short-lived map: button id -> verdict (cleared once acted on)
 _pending: dict[str, Verdict] = {}
+# short-lived map: button id -> {address, chain, opened_at, symbol} for /sell
+_pending_sell: dict[str, dict] = {}
 # de-dupe addresses we've already handled recently (reposted calls)
 _seen: set[str] = set()
 
@@ -158,6 +160,7 @@ async def on_help(event):
     await event.reply(
         "*Commands*\n"
         "• /positions — your open holdings, ROI, and value\n"
+        "• /sell — sell a position (50% or 100%) by tapping a button\n"
         "• /help — this message\n\n"
         f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
         f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
@@ -166,13 +169,83 @@ async def on_help(event):
     )
 
 
+@bot_client.on(events.NewMessage(pattern=r"^/sell", from_users=config.TG_OWNER_ID))
+async def on_sell_cmd(event):
+    """List open positions, each with Sell 50% / Sell 100% buttons."""
+    open_pos = positions.open_positions()
+    if not open_pos:
+        await event.reply("📭 No open positions to sell.")
+        return
+    await event.reply("Tap to sell a position:")
+    for p in open_pos:
+        cur = await asyncio.to_thread(market.price_usd, p.address)
+        roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
+        sid = secrets.token_hex(4)
+        _pending_sell[sid] = {"address": p.address, "chain": p.chain,
+                              "opened_at": p.opened_at, "symbol": p.symbol}
+        buttons = [[
+            Button.inline("Sell 50%", f"sell:{sid}:50".encode()),
+            Button.inline("Sell 100%", f"sell:{sid}:100".encode()),
+        ]]
+        await bot_client.send_message(
+            config.TG_OWNER_ID,
+            f"*{p.symbol}* ({p.chain}) — {roi:+.0f}%\n`{p.address}`",
+            buttons=buttons,
+        )
+
+
+def _held_raw(pos) -> int:
+    """Raw tokens we actually hold (on-chain when live, recorded when dry)."""
+    if config.DRY_RUN:
+        return pos.token_raw
+    try:
+        live, _ = executor.token_balance(pos.address, pos.chain)
+        return live
+    except Exception:  # noqa: BLE001
+        return pos.token_raw
+
+
+async def _do_sell(address: str, chain: str, opened_at: float, pct: float) -> str:
+    pos = next((p for p in positions.load()
+                if p.address == address and p.opened_at == opened_at), None)
+    if not pos:
+        return "Position not found (already closed?)."
+    held = _held_raw(pos)
+    raw = int(held * (pct / 100.0))
+    if raw <= 0:
+        return "Nothing to sell (zero balance)."
+    try:
+        res = await asyncio.to_thread(executor.sell, address, chain, raw)
+    except Exception as e:  # noqa: BLE001
+        return f"❌ Sell errored: {e}"
+    if not res.ok:
+        return f"❌ Sell failed: {res.detail}"
+    remaining = 0 if pct >= 100 else max(held - raw, 0)
+    positions.update(address, opened_at, token_raw=remaining,
+                     notes=f"manual sell {pct:.0f}%")
+    return f"✅ Sold {pct:.0f}% of {pos.symbol}: {res.detail}"
+
+
 @bot_client.on(events.CallbackQuery)
 async def on_click(event):
-    try:
-        action, sid = event.data.decode().split(":", 1)
-    except ValueError:
+    parts = event.data.decode().split(":")
+    action = parts[0]
+
+    # ---- manual sell:  sell:<sid>:<pct> ----
+    if action == "sell":
+        info = _pending_sell.pop(parts[1], None) if len(parts) >= 3 else None
+        if not info:
+            await event.answer("Expired or already handled.", alert=True)
+            return
+        pct = float(parts[2])
+        await event.edit(f"⏳ Selling {pct:.0f}% of {info['symbol']}…")
+        msg = await _do_sell(info["address"], info["chain"], info["opened_at"], pct)
+        await event.edit(msg)
         return
-    v = _pending.pop(sid, None)
+
+    # ---- buy / skip:  buy:<sid>  or  skip:<sid> ----
+    sid = parts[1] if len(parts) >= 2 else None
+    v = _pending.pop(sid, None) if sid else None
     if not v:
         await event.answer("Expired or already handled.", alert=True)
         return
@@ -211,7 +284,7 @@ async def main():
         f"Watching {config.TG_CHANNEL} (all supported chains).\n"
         f"Buy size ${config.BUY_AMOUNT_USD:g} · Take-profit: sell "
         f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x.\n"
-        f"Send /positions anytime · /help for commands."
+        f"Send /positions or /sell anytime · /help for commands."
     )
 
     await asyncio.gather(
