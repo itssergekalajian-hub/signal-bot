@@ -23,11 +23,13 @@ import secrets
 
 from telethon import Button, TelegramClient, events
 
+import chains
 import config
 import executor
 import market
 import monitor
 import positions
+import wallet_scan
 from extractor import extract_candidates
 from safety import Verdict, evaluate
 
@@ -160,7 +162,9 @@ async def on_help(event):
     await event.reply(
         "*Commands*\n"
         "• /positions — your open holdings, ROI, and value\n"
-        "• /sell — sell a position (50% or 100%) by tapping a button\n"
+        "• /sell — sell a tracked position (50% or 100%)\n"
+        "• /sell <address> — sell any token in your wallet by its contract\n"
+        "• /scan — find every token actually in your wallet, each sellable\n"
         "• /help — this message\n\n"
         f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
         f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
@@ -169,59 +173,92 @@ async def on_help(event):
     )
 
 
+def _sell_button(address: str, chain: str, symbol: str, subtitle: str) -> None:
+    """Register a pending sell and DM the owner a Sell 50% / 100% card."""
+    sid = secrets.token_hex(4)
+    _pending_sell[sid] = {"address": address, "chain": chain, "symbol": symbol}
+    buttons = [[
+        Button.inline("Sell 50%", f"sell:{sid}:50".encode()),
+        Button.inline("Sell 100%", f"sell:{sid}:100".encode()),
+    ]]
+    return (f"*{symbol}* ({chain})\n{subtitle}\n`{address}`", buttons)
+
+
 @bot_client.on(events.NewMessage(pattern=r"^/sell", from_users=config.TG_OWNER_ID))
 async def on_sell_cmd(event):
-    """List open positions, each with Sell 50% / Sell 100% buttons."""
+    """/sell → list tracked positions; /sell <address> → sell any token held."""
+    parts = event.raw_text.split()
+
+    # /sell <contract-address> — sell any token by its address (on-chain balance)
+    if len(parts) >= 2:
+        address = parts[1].strip().lower()
+        if not (address.startswith("0x") and len(address) == 42):
+            await event.reply("Send a token contract address: `/sell 0x…`")
+            return
+        m = await asyncio.to_thread(market.lookup, address)
+        chain = m.chain if m else "bsc"
+        symbol = (m.symbol if m else None) or address[:8]
+        try:
+            raw, dec = await asyncio.to_thread(executor.token_balance, address, chain)
+        except Exception as e:  # noqa: BLE001
+            await event.reply(f"Couldn't read that token on {chain}: {e}")
+            return
+        if raw <= 0:
+            await event.reply(f"You hold 0 of that token on {chain}.")
+            return
+        text, buttons = _sell_button(address, chain, symbol, f"balance: {raw / 10**dec:.4g}")
+        await bot_client.send_message(config.TG_OWNER_ID, text, buttons=buttons)
+        return
+
+    # /sell — list tracked positions
     open_pos = positions.open_positions()
     if not open_pos:
-        await event.reply("📭 No open positions to sell.")
+        await event.reply("📭 No tracked positions. To sell a token in your wallet "
+                          "the bot isn't tracking, use `/sell <address>` or /scan.")
         return
     await event.reply("Tap to sell a position:")
     for p in open_pos:
         cur = await asyncio.to_thread(market.price_usd, p.address)
         roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
-        sid = secrets.token_hex(4)
-        _pending_sell[sid] = {"address": p.address, "chain": p.chain,
-                              "opened_at": p.opened_at, "symbol": p.symbol}
-        buttons = [[
-            Button.inline("Sell 50%", f"sell:{sid}:50".encode()),
-            Button.inline("Sell 100%", f"sell:{sid}:100".encode()),
-        ]]
-        await bot_client.send_message(
-            config.TG_OWNER_ID,
-            f"*{p.symbol}* ({p.chain}) — {roi:+.0f}%\n`{p.address}`",
-            buttons=buttons,
-        )
+        text, buttons = _sell_button(p.address, p.chain, p.symbol, f"{roi:+.0f}%")
+        await bot_client.send_message(config.TG_OWNER_ID, text, buttons=buttons)
 
 
-def _held_raw(pos):
-    """Real sellable balance: on-chain when live, recorded when dry.
-
-    Returns None if a live balance read fails — so we abort rather than fall
-    back to an estimate and try to sell more than we actually hold.
-    """
-    if config.DRY_RUN:
-        return pos.token_raw
+@bot_client.on(events.NewMessage(pattern=r"^/scan", from_users=config.TG_OWNER_ID))
+async def on_scan_cmd(event):
+    """Scan the wallet for tokens it actually holds (via explorer), each sellable."""
+    if not config.ETHERSCAN_API_KEY:
+        await event.reply("To scan your wallet, add a free ETHERSCAN_API_KEY to .env "
+                          "(etherscan.io/apis). Until then, sell by address: `/sell 0x…`")
+        return
+    owner = executor.wallet_address("bsc")
+    if not owner:
+        await event.reply("No EVM wallet configured.")
+        return
+    await event.reply("🔍 Scanning your wallet on BSC…")
+    chain = chains.get("bsc")
     try:
-        live, _ = executor.token_balance(pos.address, pos.chain)
-        return live
-    except Exception:  # noqa: BLE001
-        return None
+        held = await asyncio.to_thread(wallet_scan.held_tokens, chain, owner)
+    except Exception as e:  # noqa: BLE001
+        await event.reply(f"Scan failed: {e}")
+        return
+    if not held:
+        await event.reply("No tokens with a balance found on BSC.")
+        return
+    for h in held:
+        amt = h["raw"] / (10 ** h["decimals"])
+        text, buttons = _sell_button(h["address"], "bsc", h["symbol"], f"balance: {amt:.4g}")
+        await bot_client.send_message(config.TG_OWNER_ID, text, buttons=buttons)
 
 
-async def _do_sell(address: str, chain: str, opened_at: float, pct: float) -> str:
-    pos = next((p for p in positions.load()
-                if p.address == address and p.opened_at == opened_at), None)
-    if not pos:
-        return "Position not found (already closed?)."
-    held = _held_raw(pos)
-    if held is None:
-        return "❌ Couldn't read your on-chain balance right now — try /sell again in a moment."
+async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> str:
+    """Sell pct% of the wallet's live on-chain balance of a token."""
+    try:
+        held, _ = await asyncio.to_thread(executor.token_balance, address, chain)
+    except Exception as e:  # noqa: BLE001
+        return f"❌ Couldn't read your on-chain balance: {e}"
     if held <= 0:
-        # Nothing actually held — reconcile the ledger (e.g. the buy never filled).
-        positions.update(address, opened_at, token_raw=0, notes="no on-chain balance")
-        return (f"⚠️ You hold 0 {pos.symbol} on-chain — the buy likely didn't fill. "
-                f"Marked closed in the ledger.")
+        return f"⚠️ You hold 0 {symbol} on-chain — nothing to sell."
     raw = int(held * (pct / 100.0))
     if raw <= 0:
         return "Nothing to sell (amount rounds to zero)."
@@ -231,10 +268,13 @@ async def _do_sell(address: str, chain: str, opened_at: float, pct: float) -> st
         return f"❌ Sell errored: {e}"
     if not res.ok:
         return f"❌ Sell failed: {res.detail}"
-    remaining = 0 if pct >= 100 else max(held - raw, 0)
-    positions.update(address, opened_at, token_raw=remaining,
-                     notes=f"manual sell {pct:.0f}%")
-    return f"✅ Sold {pct:.0f}% of {pos.symbol}: {res.detail}"
+    # Reconcile any tracked position for this address.
+    for p in positions.load():
+        if p.address == address:
+            positions.update(p.address, p.opened_at,
+                             token_raw=0 if pct >= 100 else max(held - raw, 0),
+                             notes=f"sold {pct:.0f}%")
+    return f"✅ Sold {pct:.0f}% of {symbol}: {res.detail}"
 
 
 @bot_client.on(events.CallbackQuery)
@@ -250,7 +290,7 @@ async def on_click(event):
             return
         pct = float(parts[2])
         await event.edit(f"⏳ Selling {pct:.0f}% of {info['symbol']}…")
-        msg = await _do_sell(info["address"], info["chain"], info["opened_at"], pct)
+        msg = await _execute_sell(info["address"], info["chain"], pct, info["symbol"])
         await event.edit(msg)
         return
 

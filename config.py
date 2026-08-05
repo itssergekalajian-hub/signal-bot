@@ -38,6 +38,9 @@ SOLANA_RPC = os.getenv("SOLANA_RPC", "https://api.mainnet-beta.solana.com").rstr
 # ── Aggregators ────────────────────────────────────────────────────────
 # EVM swaps: 0x Swap API (multichain). Get a free key at dashboard.0x.org.
 ZEROX_API_KEY = os.getenv("ZEROX_API_KEY", "")
+# Explorer key for scanning the wallet's actual token holdings (/scan).
+# One free Etherscan V2 key works across EVM chains: https://etherscan.io/apis
+ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "")
 # Solana swaps: Jupiter Ultra.
 JUPITER_BASE    = os.getenv("JUPITER_BASE", "https://lite-api.jup.ag").rstrip("/")
 JUPITER_API_KEY = os.getenv("JUPITER_API_KEY", "")

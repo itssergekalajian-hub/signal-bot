@@ -94,9 +94,15 @@ DM these to your bot:
 
 - **/positions** — your open holdings: ROI, current value, and whether the 2x
   trim has fired, plus total open value.
-- **/sell** — lists each open position with **Sell 50% / Sell 100%** buttons;
-  tap to sell on demand (uses your live on-chain balance in live mode).
+- **/sell** — lists each tracked position with **Sell 50% / Sell 100%** buttons.
+- **/sell `<address>`** — sell *any* token in your wallet by its contract
+  address, even one the bot isn't tracking (reads the real on-chain balance).
+- **/scan** — list every token actually held in the wallet (via an explorer),
+  each with sell buttons. Needs a free `ETHERSCAN_API_KEY`.
 - **/help** — quick command list and the current mode/settings.
+
+All selling uses your **live on-chain balance** as the source of truth, and a
+swap that reverts on-chain is reported as a failure (never a false success).
 
 ## Gas guard
 
