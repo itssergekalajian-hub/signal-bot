@@ -194,15 +194,19 @@ async def on_sell_cmd(event):
         )
 
 
-def _held_raw(pos) -> int:
-    """Raw tokens we actually hold (on-chain when live, recorded when dry)."""
+def _held_raw(pos):
+    """Real sellable balance: on-chain when live, recorded when dry.
+
+    Returns None if a live balance read fails — so we abort rather than fall
+    back to an estimate and try to sell more than we actually hold.
+    """
     if config.DRY_RUN:
         return pos.token_raw
     try:
         live, _ = executor.token_balance(pos.address, pos.chain)
         return live
     except Exception:  # noqa: BLE001
-        return pos.token_raw
+        return None
 
 
 async def _do_sell(address: str, chain: str, opened_at: float, pct: float) -> str:
@@ -211,9 +215,16 @@ async def _do_sell(address: str, chain: str, opened_at: float, pct: float) -> st
     if not pos:
         return "Position not found (already closed?)."
     held = _held_raw(pos)
+    if held is None:
+        return "❌ Couldn't read your on-chain balance right now — try /sell again in a moment."
+    if held <= 0:
+        # Nothing actually held — reconcile the ledger (e.g. the buy never filled).
+        positions.update(address, opened_at, token_raw=0, notes="no on-chain balance")
+        return (f"⚠️ You hold 0 {pos.symbol} on-chain — the buy likely didn't fill. "
+                f"Marked closed in the ledger.")
     raw = int(held * (pct / 100.0))
     if raw <= 0:
-        return "Nothing to sell (zero balance)."
+        return "Nothing to sell (amount rounds to zero)."
     try:
         res = await asyncio.to_thread(executor.sell, address, chain, raw)
     except Exception as e:  # noqa: BLE001

@@ -94,7 +94,11 @@ def _send(w3, acct, chain: chains.Chain, tx_fields: dict) -> str:
     if raw is None:
         raw = signed.rawTransaction
     h = w3.eth.send_raw_transaction(raw)
-    w3.eth.wait_for_transaction_receipt(h, timeout=180)
+    receipt = w3.eth.wait_for_transaction_receipt(h, timeout=180)
+    # A reverted tx is still mined — status 0 means it FAILED on-chain. Treat
+    # that as an error so we never report a revert as a successful fill.
+    if getattr(receipt, "status", None) != 1:
+        raise RuntimeError(f"transaction reverted on-chain — {chain.explorer_tx}{h.hex()}")
     return h.hex()
 
 
