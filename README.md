@@ -29,6 +29,13 @@ DexScreener, then routes to the right DEX:
 Adding another EVM chain is one row in `chains.py`. A token on a chain the bot
 doesn't support is safely skipped, not traded blindly.
 
+**four.meme launchpad (BSC):** many BSC signal calls are four.meme tokens still
+on their bonding curve — 0x/PancakeSwap can't trade those until they graduate.
+The bot detects this (via four.meme's Helper `getTokenInfo.liquidityAdded`) and
+routes buys/sells through four.meme's `TokenManager` (`buyTokenAMAP` /
+`sellToken`), falling back to 0x once a token graduates. Toggle with
+`FOURMEME_ENABLED`; slippage via `FOURMEME_SLIPPAGE_BPS` (curves move fast).
+
 ## Read this first (money at risk)
 
 - **Most memecoin calls go to zero.** The safety gate blocks honeypots, high-tax
@@ -121,6 +128,8 @@ it. **Sells are never gas-guarded** — the bot must always be able to exit.
 - `safety.py` — DexScreener + GoPlus → pass/fail verdict, any chain
 - `executor.py` — dispatcher: USD sizing + DRY_RUN, routes to the adapter
 - `evm_executor.py` — 0x aggregator swaps + web3 signing (all EVM chains)
+- `fourmeme.py` — trade four.meme launchpad tokens (BSC) still on the bonding
+  curve, which 0x can't reach until they graduate; routed automatically
 - `solana_executor.py` — Jupiter Ultra swaps + balance reads (Solana)
 - `positions.py` — open-position ledger, persisted to `positions.json`
 - `monitor.py` — background loop: re-price positions, sell 50% at 2x

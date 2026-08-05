@@ -66,6 +66,13 @@ def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.buy(address, amount_native)
+    # BSC: a four.meme token still on its bonding curve can't be traded by 0x
+    # until it graduates — route those through four.meme.
+    if chain.key == "bsc":
+        import fourmeme
+        info = fourmeme.token_info(address)
+        if info and info["on_curve"]:
+            return fourmeme.buy(address, amount_native, info)
     import evm_executor
     return evm_executor.buy(chain, address, amount_native)
 
@@ -88,6 +95,11 @@ def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.sell(address, raw_amount)
+    if chain.key == "bsc":
+        import fourmeme
+        info = fourmeme.token_info(address)
+        if info and info["on_curve"]:
+            return fourmeme.sell(address, raw_amount, info)
     import evm_executor
     return evm_executor.sell(chain, address, raw_amount)
 

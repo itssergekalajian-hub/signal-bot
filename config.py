@@ -52,6 +52,11 @@ BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "10"))  # USD per buy, any ch
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
 SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "500"))  # 5% exits
 
+# four.meme launchpad (BSC): trade tokens still on the bonding curve, which 0x
+# can't reach until they graduate to PancakeSwap. Routed automatically.
+FOURMEME_ENABLED       = _b("FOURMEME_ENABLED", True)
+FOURMEME_SLIPPAGE_BPS  = int(os.getenv("FOURMEME_SLIPPAGE_BPS", "1500"))  # 15% — curve moves fast
+
 # ── Gas guard: don't let fees eat the position ─────────────────────────
 # Skip a BUY when estimated gas exceeds MAX_GAS_PCT of BUY_AMOUNT_USD, or an
 # optional hard cap MAX_GAS_USD (0 = no absolute cap). Matters mainly on
