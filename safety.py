@@ -132,7 +132,54 @@ def evaluate(address: str) -> Verdict:
         v.passed = False
         v.reasons.append(f"pair age {m.age_min:.0f}m < {config.MIN_PAIR_AGE_MIN:.0f}m")
 
-    # ---- Token security (honeypot / taxes / mintable) ----
+    # ---- Token security (mintable / holder flags via GoPlus) ----
     _check_security(v, chain)
 
+    # ---- Sellability: prove we could actually EXIT (anti-honeypot). Runs last
+    #      so its simulation-based tax figures win over GoPlus metadata. ----
+    _check_sellability(v, chain)
+
     return v
+
+
+def _check_sellability(v: Verdict, chain: chains.Chain) -> None:
+    """The biggest anti-honeypot lever: prove the token can be sold, not just bought."""
+    if not config.HONEYPOT_CHECK:
+        return
+
+    # four.meme on-curve tokens have no DEX pool yet -> use four.meme's trySell.
+    if chain.key == "bsc":
+        try:
+            import fourmeme
+            info = fourmeme.token_info(v.address)
+        except Exception:  # noqa: BLE001
+            info = None
+        if info and info.get("on_curve"):
+            ok, tax, reason = fourmeme.sellable(v.address)
+            if not ok:
+                v.passed = False
+                v.reasons.append(reason)
+                return
+            if tax is not None:
+                v.info["sell_tax_pct"] = round(tax, 1)
+                if tax > config.MAX_HONEYPOT_TAX_PCT:
+                    v.passed = False
+                    v.reasons.append(f"sell tax {tax:.0f}% > {config.MAX_HONEYPOT_TAX_PCT:.0f}%")
+            return
+
+    # DEX / graduated tokens -> honeypot.is simulates a real buy+sell.
+    import honeypot
+    res = honeypot.check(chain, v.address)
+    if res is None or not res["sim_ok"]:
+        if config.STRICT_SAFETY:
+            v.passed = False
+            v.reasons.append("couldn't simulate a sell — failing closed")
+        return
+    if res["is_honeypot"]:
+        v.passed = False
+        v.reasons.append("HONEYPOT — simulated sell failed (you couldn't exit)")
+    v.info["buy_tax_pct"] = round(res["buy_tax"], 1)
+    v.info["sell_tax_pct"] = round(res["sell_tax"], 1)
+    if res["sell_tax"] > config.MAX_HONEYPOT_TAX_PCT:
+        v.passed = False
+        v.reasons.append(f"sell tax {res['sell_tax']:.0f}% > {config.MAX_HONEYPOT_TAX_PCT:.0f}%")

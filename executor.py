@@ -28,6 +28,15 @@ def native_price(chain: chains.Chain) -> float | None:
     return market.price_usd(chain.wrapped_native)
 
 
+def native_balance(chain_key: str) -> float:
+    """Wallet's native-coin balance on a chain (EVM only for now)."""
+    chain = chains.get(chain_key)
+    if not chain or chain.family != "evm":
+        return 0.0
+    import evm_executor
+    return evm_executor.native_balance(chain)
+
+
 def wallet_address(chain_key: str) -> str | None:
     chain = chains.get(chain_key)
     if not chain:

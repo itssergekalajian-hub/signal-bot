@@ -151,6 +151,15 @@ def sell(chain: chains.Chain, address: str, raw_amount: int) -> SwapResult:
     return SwapResult(True, f"filled — {chain.explorer_tx}{txh}", txh)
 
 
+def native_balance(chain: chains.Chain) -> float:
+    """The wallet's native-coin balance (BNB/ETH/…) as a float, 0 if no wallet."""
+    owner = wallet_address()
+    if not owner:
+        return 0.0
+    w3 = _w3(chain)
+    return w3.eth.get_balance(w3.to_checksum_address(owner)) / 1e18
+
+
 def token_balance(chain: chains.Chain, address: str) -> tuple[int, int]:
     """(raw_amount, decimals) held for an ERC-20; (0, 0) if none / no wallet."""
     owner = wallet_address()

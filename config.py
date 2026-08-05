@@ -81,3 +81,11 @@ REQ_MINT_REVOKED  = _b("REQUIRE_MINT_AUTHORITY_REVOKED", True)
 # STRICT_SAFETY=true rejects when security data is missing (safer, but skips
 # very fresh calls that aren't indexed yet). Default false so fresh calls pass.
 STRICT_SAFETY     = _b("STRICT_SAFETY", False)
+
+# Sellability protection — the biggest anti-honeypot lever.
+#  - DEX/graduated tokens: honeypot.is simulates a real buy+sell.
+#  - four.meme on-curve tokens: four.meme's trySell must succeed.
+# A token that can't be sold is rejected regardless of STRICT_SAFETY.
+HONEYPOT_CHECK       = _b("HONEYPOT_CHECK", True)
+MAX_HONEYPOT_TAX_PCT = float(os.getenv("MAX_HONEYPOT_TAX_PCT", "15"))  # reject if sell tax over this
+MIN_HOLDERS          = int(os.getenv("MIN_HOLDERS", "0"))              # 0 = off

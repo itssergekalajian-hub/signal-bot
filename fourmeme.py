@@ -39,6 +39,10 @@ _HELPER_ABI = [
      "outputs": [{"type": "address"}, {"type": "address"}, {"type": "uint256"},
                  {"type": "uint256"}, {"type": "uint256"}, {"type": "uint256"},
                  {"type": "uint256"}, {"type": "uint256"}]},
+    {"name": "trySell", "stateMutability": "view", "type": "function",
+     "inputs": [{"name": "token", "type": "address"}, {"name": "amount", "type": "uint256"}],
+     "outputs": [{"type": "address"}, {"type": "address"},
+                 {"type": "uint256"}, {"type": "uint256"}]},
 ]
 
 _TM_ABI = [
@@ -80,6 +84,27 @@ def token_info(address: str) -> dict | None:
     if version == 0 or int(token_manager, 16) == 0:
         return None
     return {"token_manager": token_manager, "on_curve": not liquidity_added, "version": version}
+
+
+def sellable(address: str) -> tuple[bool, float | None, str]:
+    """Can this on-curve token be sold? Returns (ok, sell_tax_pct, reason).
+
+    Uses four.meme's trySell: if it reverts or returns 0 funds, the token can't
+    be exited on the curve — treat it as a honeypot and refuse to buy.
+    """
+    try:
+        w3, _ = _bsc()
+        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
+        nominal = 10 ** 18  # 1 token (18-dec) is enough to prove sellability
+        _, _, funds, fee = helper.functions.trySell(
+            w3.to_checksum_address(address), nominal).call()
+    except Exception:  # noqa: BLE001
+        return (False, None, "four.meme trySell reverted — not sellable")
+    if funds <= 0:
+        return (False, None, "four.meme returns 0 on sell — not sellable")
+    gross = funds + fee
+    tax = (fee / gross * 100) if gross > 0 else 0.0
+    return (True, tax, "")
 
 
 def buy(address: str, amount_native: float, info: dict | None = None) -> SwapResult:

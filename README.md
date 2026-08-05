@@ -95,10 +95,25 @@ At Stage 3, fund each chain's wallet with a **small** amount and native gas
   driven by the channel posting a "take profit" message — these channels call
   entries, not exits. Tune `TAKE_PROFIT_MULT` / `TAKE_PROFIT_SELL_PCT`.
 
+## Anti-honeypot protection
+
+Before buying, the gate **proves the token can actually be sold** — the single
+biggest defense against rug/honeypot tokens:
+
+- **DEX / graduated tokens** → `honeypot.is` simulates a real buy **and sell**
+  and reports whether the sell works and the tax (`honeypot.py`).
+- **four.meme on-curve tokens** → four.meme's `trySell` must succeed, and the
+  curve sell-tax is checked (`fourmeme.sellable`).
+- A token that can't be sold is rejected regardless of `STRICT_SAFETY`; tax over
+  `MAX_HONEYPOT_TAX_PCT` is rejected. Plus liquidity, age, and GoPlus flags.
+
 ## Telegram commands
 
-DM these to your bot:
+DM these to your bot (they also appear in Telegram's `/` menu):
 
+- **/menu** — a button menu for everything below.
+- **/wallet** — total wallet value (native coin + token holdings).
+- **/pause** · **/resume** — stop / start auto-buying without touching the server.
 - **/positions** — your open holdings: ROI, current value, and whether the 2x
   trim has fired, plus total open value.
 - **/sell** — lists each tracked position with **Sell 50% / Sell 100%** buttons.

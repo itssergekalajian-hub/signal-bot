@@ -42,6 +42,8 @@ _pending: dict[str, Verdict] = {}
 _pending_sell: dict[str, dict] = {}
 # de-dupe addresses we've already handled recently (reposted calls)
 _seen: set[str] = set()
+# runtime state you can toggle from Telegram (pause stops auto-buying)
+_state: dict[str, bool] = {"paused": False}
 
 
 async def _notify(text: str) -> None:
@@ -97,6 +99,8 @@ async def _open_trade(v: Verdict) -> None:
 
 @user_client.on(events.NewMessage(chats=[config.TG_CHANNEL]))
 async def on_channel_message(event):
+    if _state["paused"]:
+        return  # trading paused from Telegram — ignore calls until resumed
     for address in extract_candidates(event.raw_text):
         if address in _seen:
             continue
@@ -159,18 +163,7 @@ async def on_positions(event):
 
 @bot_client.on(events.NewMessage(pattern=r"^/help", from_users=config.TG_OWNER_ID))
 async def on_help(event):
-    await event.reply(
-        "*Commands*\n"
-        "• /positions — your open holdings, ROI, and value\n"
-        "• /sell — sell a tracked position (50% or 100%)\n"
-        "• /sell <address> — sell any token in your wallet by its contract\n"
-        "• /scan — find every token actually in your wallet, each sellable\n"
-        "• /help — this message\n\n"
-        f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
-        f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
-        f"${config.BUY_AMOUNT_USD:g}/buy · TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@"
-        f"{config.TAKE_PROFIT_MULT:g}x"
-    )
+    await event.reply(_help_text())
 
 
 def _sell_button(address: str, chain: str, symbol: str, subtitle: str) -> None:
@@ -211,17 +204,23 @@ async def on_sell_cmd(event):
         return
 
     # /sell — list tracked positions
-    open_pos = positions.open_positions()
-    if not open_pos:
+    if not await _send_sell_cards():
         await event.reply("📭 No tracked positions. To sell a token in your wallet "
                           "the bot isn't tracking, use `/sell <address>` or /scan.")
-        return
-    await event.reply("Tap to sell a position:")
+
+
+async def _send_sell_cards() -> bool:
+    """Post a Sell 50%/100% card for each tracked position. False if none."""
+    open_pos = positions.open_positions()
+    if not open_pos:
+        return False
+    await bot_client.send_message(config.TG_OWNER_ID, "Tap to sell a position:")
     for p in open_pos:
         cur = await asyncio.to_thread(market.price_usd, p.address)
         roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
         text, buttons = _sell_button(p.address, p.chain, p.symbol, f"{roi:+.0f}%")
         await bot_client.send_message(config.TG_OWNER_ID, text, buttons=buttons)
+    return True
 
 
 @bot_client.on(events.NewMessage(pattern=r"^/scan", from_users=config.TG_OWNER_ID))
@@ -249,6 +248,96 @@ async def on_scan_cmd(event):
         amt = h["raw"] / (10 ** h["decimals"])
         text, buttons = _sell_button(h["address"], "bsc", h["symbol"], f"balance: {amt:.4g}")
         await bot_client.send_message(config.TG_OWNER_ID, text, buttons=buttons)
+
+
+async def _wallet_report() -> str:
+    """Overall wallet value: native coin + token holdings, in USD."""
+    chain = chains.get("bsc")
+    lines = ["💼 *Wallet value* (BSC)\n"]
+    total = 0.0
+    try:
+        bnb = await asyncio.to_thread(executor.native_balance, "bsc")
+        bnb_px = await asyncio.to_thread(executor.native_price, chain) or 0.0
+        val = bnb * bnb_px
+        total += val
+        lines.append(f"• {bnb:.4g} {chain.native_symbol} → ${val:.2f}")
+    except Exception:  # noqa: BLE001
+        lines.append(f"• {chain.native_symbol}: balance unavailable")
+
+    holdings = []
+    if config.ETHERSCAN_API_KEY:
+        owner = executor.wallet_address("bsc")
+        if owner:
+            try:
+                holdings = await asyncio.to_thread(wallet_scan.held_tokens, chain, owner)
+            except Exception:  # noqa: BLE001
+                holdings = []
+    for h in holdings:
+        px = await asyncio.to_thread(market.price_usd, h["address"])
+        amt = h["raw"] / (10 ** h["decimals"])
+        val = amt * px if px else 0.0
+        total += val
+        lines.append(f"• {amt:.4g} {h['symbol']} → ${val:.2f}" + ("" if px else " (no price)"))
+    if not config.ETHERSCAN_API_KEY:
+        lines.append("_add ETHERSCAN_API_KEY to include token holdings_")
+
+    lines.append(f"\n💰 *Total: ~${total:.2f}*")
+    return "\n".join(lines)
+
+
+def _help_text() -> str:
+    return (
+        "*Commands*\n"
+        "• /menu — button menu\n"
+        "• /wallet — total wallet value (coin + tokens)\n"
+        "• /positions — open holdings, ROI, value\n"
+        "• /sell — sell a tracked position (50%/100%)\n"
+        "• /sell <address> — sell any token by contract\n"
+        "• /scan — list every token in your wallet\n"
+        "• /pause · /resume — stop / start auto-buying\n"
+        "• /help — this message\n\n"
+        f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
+        f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
+        f"{'⏸ PAUSED' if _state['paused'] else '▶️ active'} · "
+        f"${config.BUY_AMOUNT_USD:g}/buy · TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@"
+        f"{config.TAKE_PROFIT_MULT:g}x"
+    )
+
+
+def _menu_markup():
+    toggle = "▶️ Resume" if _state["paused"] else "⏸ Pause"
+    return [
+        [Button.inline("📊 Positions", b"menu:positions"),
+         Button.inline("💼 Wallet", b"menu:wallet")],
+        [Button.inline("💸 Sell", b"menu:sell"),
+         Button.inline("🔍 Scan", b"menu:scan")],
+        [Button.inline(toggle, b"menu:toggle"),
+         Button.inline("❓ Help", b"menu:help")],
+    ]
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/(menu|start)", from_users=config.TG_OWNER_ID))
+async def on_menu(event):
+    state = "⏸ PAUSED" if _state["paused"] else "▶️ active"
+    await event.reply(f"🤖 *Signal bot* — {state}\nPick an action:", buttons=_menu_markup())
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/wallet", from_users=config.TG_OWNER_ID))
+async def on_wallet(event):
+    msg = await event.reply("💼 Tallying your wallet…")
+    await msg.edit(await _wallet_report())
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/pause", from_users=config.TG_OWNER_ID))
+async def on_pause(event):
+    _state["paused"] = True
+    await event.reply("⏸ Paused — new calls will be ignored until /resume.")
+
+
+@bot_client.on(events.NewMessage(pattern=r"^/resume", from_users=config.TG_OWNER_ID))
+async def on_resume(event):
+    _state["paused"] = False
+    await event.reply("▶️ Resumed — watching for calls again.")
 
 
 async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> str:
@@ -281,6 +370,31 @@ async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> st
 async def on_click(event):
     parts = event.data.decode().split(":")
     action = parts[0]
+
+    # ---- menu buttons:  menu:<what> ----
+    if action == "menu":
+        what = parts[1] if len(parts) >= 2 else ""
+        await event.answer()
+        if what == "positions":
+            await event.respond(await _positions_report())
+        elif what == "wallet":
+            m = await event.respond("💼 Tallying…")
+            await m.edit(await _wallet_report())
+        elif what == "sell":
+            if not await _send_sell_cards():
+                await event.respond("📭 No tracked positions. Use `/sell <address>` or /scan.")
+        elif what == "scan":
+            await on_scan_cmd(event)
+        elif what == "help":
+            await event.respond(_help_text())
+        elif what == "toggle":
+            _state["paused"] = not _state["paused"]
+            state = "⏸ PAUSED" if _state["paused"] else "▶️ active"
+            try:
+                await event.edit(f"🤖 *Signal bot* — {state}\nPick an action:", buttons=_menu_markup())
+            except Exception:  # noqa: BLE001
+                await event.respond(f"Now {state}.")
+        return
 
     # ---- manual sell:  sell:<sid>:<pct> ----
     if action == "sell":
@@ -322,9 +436,27 @@ async def on_click(event):
         await event.edit(f"❌ {res.detail}")
 
 
+async def _register_commands():
+    """Populate Telegram's "/" command menu (best-effort)."""
+    try:
+        from telethon.tl import functions, types
+        cmds = [
+            ("menu", "Button menu"), ("wallet", "Total wallet value"),
+            ("positions", "Open positions"), ("sell", "Sell a position"),
+            ("scan", "Scan wallet tokens"), ("pause", "Pause auto-buying"),
+            ("resume", "Resume auto-buying"), ("help", "Help"),
+        ]
+        await bot_client(functions.bots.SetBotCommandsRequest(
+            scope=types.BotCommandScopeDefault(), lang_code="",
+            commands=[types.BotCommand(c, d) for c, d in cmds]))
+    except Exception as e:  # noqa: BLE001
+        print(f"[commands] could not register menu: {e}")
+
+
 async def main():
     await bot_client.start(bot_token=config.TG_BOT_TOKEN)
     await user_client.start()  # first run prompts for phone + code
+    await _register_commands()
 
     dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real funds"
     auto = "AUTO buy" if config.AUTO_TRADE else "manual confirm"
@@ -335,7 +467,7 @@ async def main():
         f"Watching {config.TG_CHANNEL} (all supported chains).\n"
         f"Buy size ${config.BUY_AMOUNT_USD:g} · Take-profit: sell "
         f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x.\n"
-        f"Send /positions or /sell anytime · /help for commands."
+        f"Send /menu for controls · /help for commands."
     )
 
     await asyncio.gather(
