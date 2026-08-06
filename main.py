@@ -231,9 +231,9 @@ async def _send_sell_cards() -> bool:
 @bot_client.on(events.NewMessage(pattern=r"^/scan", from_users=config.TG_OWNER_ID))
 async def on_scan_cmd(event):
     """Scan the wallet for tokens it actually holds (via explorer), each sellable."""
-    if not config.ETHERSCAN_API_KEY:
-        await event.reply("To scan your wallet, add a free ETHERSCAN_API_KEY to .env "
-                          "(etherscan.io/apis). Until then, sell by address: `/sell 0x…`")
+    if not config.BSCSCAN_API_KEY:
+        await event.reply("To scan your wallet, add a free BSCSCAN_API_KEY to .env "
+                          "(bscscan.com/myapikey). Until then, sell by address: `/sell 0x…`")
         return
     owner = executor.wallet_address("bsc")
     if not owner:
@@ -270,7 +270,7 @@ async def _wallet_report() -> str:
         lines.append(f"• {chain.native_symbol}: balance unavailable")
 
     holdings = []
-    if config.ETHERSCAN_API_KEY:
+    if config.BSCSCAN_API_KEY:
         owner = executor.wallet_address("bsc")
         if owner:
             try:
@@ -283,8 +283,8 @@ async def _wallet_report() -> str:
         val = amt * px if px else 0.0
         total += val
         lines.append(f"• {amt:.4g} {h['symbol']} → ${val:.2f}" + ("" if px else " (no price)"))
-    if not config.ETHERSCAN_API_KEY:
-        lines.append("_add ETHERSCAN_API_KEY to include token holdings_")
+    if not config.BSCSCAN_API_KEY:
+        lines.append("_add BSCSCAN_API_KEY to include token holdings_")
 
     lines.append(f"\n💰 *Total: ~${total:.2f}*")
     return "\n".join(lines)

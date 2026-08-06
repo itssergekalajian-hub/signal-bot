@@ -14,24 +14,37 @@ import chains
 import config
 import evm_executor
 
-_ETHERSCAN = "https://api.etherscan.io/v2/api"
 _TIMEOUT = 20
+
+
+def _token_transfers(chain: chains.Chain, owner: str, key: str) -> list:
+    """Fetch the wallet's ERC-20 transfer history. Tries the unified Etherscan
+    V2 endpoint first, then the classic BscScan endpoint — so a key from either
+    bscscan.com or etherscan.io works."""
+    base_params = {"module": "account", "action": "tokentx", "address": owner,
+                   "page": 1, "offset": 2000, "sort": "desc", "apikey": key}
+    endpoints = [
+        ("https://api.etherscan.io/v2/api", {"chainid": chain.evm_chain_id}),
+        ("https://api.bscscan.com/api", {}),
+    ]
+    for base, extra in endpoints:
+        try:
+            r = requests.get(base, params={**base_params, **extra}, timeout=_TIMEOUT)
+            r.raise_for_status()
+            result = r.json().get("result")
+            if isinstance(result, list) and result:
+                return result
+        except Exception:  # noqa: BLE001
+            continue
+    return []
 
 
 def held_tokens(chain: chains.Chain, owner: str) -> list[dict]:
     """Return [{address, symbol, raw, decimals}] the wallet currently holds."""
-    if not config.ETHERSCAN_API_KEY:
-        raise RuntimeError("ETHERSCAN_API_KEY not set")
+    if not config.BSCSCAN_API_KEY:
+        raise RuntimeError("BSCSCAN_API_KEY not set")
 
-    r = requests.get(_ETHERSCAN, params={
-        "chainid": chain.evm_chain_id, "module": "account", "action": "tokentx",
-        "address": owner, "page": 1, "offset": 2000, "sort": "desc",
-        "apikey": config.ETHERSCAN_API_KEY,
-    }, timeout=_TIMEOUT)
-    r.raise_for_status()
-    txs = r.json().get("result") or []
-    if not isinstance(txs, list):
-        return []
+    txs = _token_transfers(chain, owner, config.BSCSCAN_API_KEY)
 
     # Unique token contracts the wallet has touched (most recent first).
     seen: dict[str, dict] = {}

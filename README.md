@@ -120,7 +120,7 @@ DM these to your bot (they also appear in Telegram's `/` menu):
 - **/sell `<address>`** — sell *any* token in your wallet by its contract
   address, even one the bot isn't tracking (reads the real on-chain balance).
 - **/scan** — list every token actually held in the wallet (via an explorer),
-  each with sell buttons. Needs a free `ETHERSCAN_API_KEY`.
+  each with sell buttons. Needs a free `BSCSCAN_API_KEY` (bscscan.com/myapikey).
 - **/help** — quick command list and the current mode/settings.
 
 All selling uses your **live on-chain balance** as the source of truth, and a
