@@ -12,16 +12,24 @@ def _b(name: str, default: bool) -> bool:
 TG_API_ID   = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH = os.getenv("TG_API_HASH", "")
 
-def _channel(v: str):
-    """A public channel is '@name'; a private one is a numeric id like
-    -1001234567890. Return an int for numeric ids so Telethon resolves them."""
-    v = (v or "").strip()
-    try:
-        return int(v)
-    except ValueError:
-        return v
+def _channels(raw: str) -> list:
+    """TG_CHANNEL may be ONE or SEVERAL channels, comma-separated. Each entry is
+    a public '@name' (str) or a private numeric id like -1001234567890 (int, so
+    Telethon resolves it). Watching Mark + a private channel: '@MarkDegens,-100…'.
+    """
+    out = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(part)
+    return out
 
-TG_CHANNEL  = _channel(os.getenv("TG_CHANNEL", ""))
+TG_CHANNELS = _channels(os.getenv("TG_CHANNEL", ""))
+TG_CHANNEL_DISPLAY = ", ".join(str(c) for c in TG_CHANNELS) or "(none)"
 
 # Telegram — confirm/status bot
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")

@@ -102,7 +102,7 @@ async def _open_trade(v: Verdict) -> None:
     await _notify(f"✅ {res.detail}{_buy_tail(pos)}")
 
 
-@user_client.on(events.NewMessage(chats=[config.TG_CHANNEL]))
+@user_client.on(events.NewMessage(chats=config.TG_CHANNELS))
 async def on_channel_message(event):
     if _state["paused"]:
         return  # trading paused from Telegram — ignore calls until resumed
@@ -469,10 +469,10 @@ async def main():
     tp = (f"Take-profit: sell {config.TAKE_PROFIT_SELL_PCT:.0f}% at "
           f"{config.TAKE_PROFIT_MULT:g}x." if config.TAKE_PROFIT_ENABLED
           else "Selling: manual only (no auto take-profit / stop-loss).")
-    print(f"Bot running: {mode}. Watching {config.TG_CHANNEL}.")
+    print(f"Bot running: {mode}. Watching {config.TG_CHANNEL_DISPLAY}.")
     await _notify(
         f"🤖 Online. Mode: *{mode}*.\n"
-        f"Watching {config.TG_CHANNEL} (all supported chains).\n"
+        f"Watching {len(config.TG_CHANNELS)} channel(s): {config.TG_CHANNEL_DISPLAY}.\n"
         f"Buy size ${config.BUY_AMOUNT_USD:g} · {tp}\n"
         f"Send /menu for controls · /help for commands."
     )
