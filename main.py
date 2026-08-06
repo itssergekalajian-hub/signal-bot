@@ -353,7 +353,15 @@ async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> st
     except Exception as e:  # noqa: BLE001
         return f"❌ Couldn't read your on-chain balance: {e}"
     if held <= 0:
-        return f"⚠️ You hold 0 {symbol} on-chain — nothing to sell."
+        # Ghost position (e.g. a reverted buy recorded before the fix) — prune it
+        # so it stops showing in /positions and /sell.
+        pruned = False
+        for p in positions.load():
+            if p.address == address and p.token_raw:
+                positions.update(p.address, p.opened_at, token_raw=0, notes="0 on-chain (pruned)")
+                pruned = True
+        note = " (removed from your list)" if pruned else ""
+        return f"⚠️ You hold 0 {symbol} on-chain — nothing to sell{note}."
     raw = int(held * (pct / 100.0))
     if raw <= 0:
         return "Nothing to sell (amount rounds to zero)."
