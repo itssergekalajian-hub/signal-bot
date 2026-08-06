@@ -72,8 +72,18 @@ def _format(v: Verdict) -> str:
     return "\n".join(lines)
 
 
+def _buy_tail(pos) -> str:
+    """The trailing line on a buy confirmation, per take-profit setting."""
+    if not config.TAKE_PROFIT_ENABLED:
+        return "\n💼 Recorded — sell anytime with /sell (no auto-sell)."
+    if pos is None:
+        return "\n⚠️ No entry price — take-profit tracking off for this one."
+    return (f"\n📈 Tracking for {config.TAKE_PROFIT_MULT:g}x → "
+            f"will sell {config.TAKE_PROFIT_SELL_PCT:.0f}%.")
+
+
 async def _open_trade(v: Verdict) -> None:
-    """Buy the token, record the position for take-profit tracking, and report."""
+    """Buy the token, record the position, and report."""
     await _notify(f"⏳ Opening {v.info.get('symbol') or v.address} on {v.chain}…")
     try:
         res = await asyncio.to_thread(executor.buy, v.address, v.chain, config.BUY_AMOUNT_USD)
@@ -89,12 +99,7 @@ async def _open_trade(v: Verdict) -> None:
         v.address, v.chain, v.info.get("symbol") or "?",
         config.BUY_AMOUNT_USD, _entry_price(v), res,
     )
-    if pos is None:
-        tail = "\n⚠️ No entry price — take-profit tracking disabled for this one."
-    else:
-        tail = (f"\n📈 Tracking for {config.TAKE_PROFIT_MULT:g}x → "
-                f"will sell {config.TAKE_PROFIT_SELL_PCT:.0f}%.")
-    await _notify(f"✅ {res.detail}{tail}")
+    await _notify(f"✅ {res.detail}{_buy_tail(pos)}")
 
 
 @user_client.on(events.NewMessage(chats=[config.TG_CHANNEL]))
@@ -299,8 +304,9 @@ def _help_text() -> str:
         f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
         f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
         f"{'⏸ PAUSED' if _state['paused'] else '▶️ active'} · "
-        f"${config.BUY_AMOUNT_USD:g}/buy · TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@"
-        f"{config.TAKE_PROFIT_MULT:g}x"
+        f"${config.BUY_AMOUNT_USD:g}/buy · "
+        + (f"TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@{config.TAKE_PROFIT_MULT:g}x"
+           if config.TAKE_PROFIT_ENABLED else "manual sell only")
     )
 
 
@@ -426,12 +432,11 @@ async def on_click(event):
         await event.edit(f"❌ Buy errored: {e}")
         return
     if res.ok:
-        monitor.record_buy(
+        pos = monitor.record_buy(
             v.address, v.chain, v.info.get("symbol") or "?",
             config.BUY_AMOUNT_USD, _entry_price(v), res,
         )
-        await event.edit(f"✅ {res.detail}\n📈 Tracking for {config.TAKE_PROFIT_MULT:g}x "
-                         f"→ will sell {config.TAKE_PROFIT_SELL_PCT:.0f}%.")
+        await event.edit(f"✅ {res.detail}{_buy_tail(pos)}")
     else:
         await event.edit(f"❌ {res.detail}")
 
@@ -461,20 +466,24 @@ async def main():
     dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real funds"
     auto = "AUTO buy" if config.AUTO_TRADE else "manual confirm"
     mode = f"{dry} · {auto}"
+    tp = (f"Take-profit: sell {config.TAKE_PROFIT_SELL_PCT:.0f}% at "
+          f"{config.TAKE_PROFIT_MULT:g}x." if config.TAKE_PROFIT_ENABLED
+          else "Selling: manual only (no auto take-profit / stop-loss).")
     print(f"Bot running: {mode}. Watching {config.TG_CHANNEL}.")
     await _notify(
         f"🤖 Online. Mode: *{mode}*.\n"
         f"Watching {config.TG_CHANNEL} (all supported chains).\n"
-        f"Buy size ${config.BUY_AMOUNT_USD:g} · Take-profit: sell "
-        f"{config.TAKE_PROFIT_SELL_PCT:.0f}% at {config.TAKE_PROFIT_MULT:g}x.\n"
+        f"Buy size ${config.BUY_AMOUNT_USD:g} · {tp}\n"
         f"Send /menu for controls · /help for commands."
     )
 
-    await asyncio.gather(
+    tasks = [
         user_client.run_until_disconnected(),
         bot_client.run_until_disconnected(),
-        monitor.run(_notify),  # background take-profit loop
-    )
+    ]
+    if config.TAKE_PROFIT_ENABLED:
+        tasks.append(monitor.run(_notify))  # background take-profit loop
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

@@ -67,6 +67,9 @@ MAX_GAS_USD    = float(os.getenv("MAX_GAS_USD", "0"))        # 0 = disabled
 SWAP_GAS_UNITS = int(os.getenv("SWAP_GAS_UNITS", "250000"))  # assumed gas/swap
 
 # ── Take-profit: "sell 50% at 2x / 100% ROI" ───────────────────────────
+# TAKE_PROFIT_ENABLED=false -> the bot never auto-sells; you exit manually with
+# /sell. No take-profit, no stop-loss — buy-only.
+TAKE_PROFIT_ENABLED  = _b("TAKE_PROFIT_ENABLED", True)
 TAKE_PROFIT_MULT     = float(os.getenv("TAKE_PROFIT_MULT", "2.0"))
 TAKE_PROFIT_SELL_PCT = float(os.getenv("TAKE_PROFIT_SELL_PCT", "50"))
 POLL_INTERVAL_SEC    = int(os.getenv("POLL_INTERVAL_SEC", "30"))
