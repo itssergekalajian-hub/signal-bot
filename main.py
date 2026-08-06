@@ -256,8 +256,9 @@ async def _send_sell_cards() -> bool:
 async def on_scan_cmd(event):
     """Scan the wallet for tokens it actually holds (via explorer), each sellable."""
     if not config.BSCSCAN_API_KEY:
-        await event.reply("To scan your wallet, add a free BSCSCAN_API_KEY to .env "
-                          "(bscscan.com/myapikey). Until then, sell by address: `/sell 0x…`")
+        await event.reply("To scan your wallet, add a free key to .env as BSCSCAN_API_KEY "
+                          "— get it at etherscan.io/apis (one Etherscan key covers BSC). "
+                          "Until then, sell by address: `/sell 0x…`")
         return
     owner = executor.wallet_address("bsc")
     if not owner:

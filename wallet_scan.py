@@ -18,31 +18,22 @@ _TIMEOUT = 20
 
 
 def _token_transfers(chain: chains.Chain, owner: str, key: str) -> list:
-    """Fetch the wallet's ERC-20 transfer history. Tries the unified Etherscan
-    V2 endpoint first, then the classic BscScan endpoint — so a key from either
-    bscscan.com or etherscan.io works."""
-    base_params = {"module": "account", "action": "tokentx", "address": owner,
-                   "page": 1, "offset": 2000, "sort": "desc", "apikey": key}
-    endpoints = [
-        ("https://api.etherscan.io/v2/api", {"chainid": chain.evm_chain_id}),
-        ("https://api.bscscan.com/api", {}),
-    ]
-    last_err = None
-    for base, extra in endpoints:
-        try:
-            r = requests.get(base, params={**base_params, **extra}, timeout=_TIMEOUT)
-            r.raise_for_status()
-            body = r.json()
-            result = body.get("result")
-            if isinstance(result, list):
-                return result  # valid response (possibly an empty history)
-            # result is a string here -> an API error (e.g. "Invalid API Key")
-            last_err = f"{body.get('message')}: {result}"
-        except Exception as e:  # noqa: BLE001
-            last_err = str(e)
-    if last_err:
-        raise RuntimeError(last_err)  # surface it instead of silent "no tokens"
-    return []
+    """Fetch the wallet's ERC-20 transfer history via the Etherscan V2 API.
+
+    V2 is the current unified API — one key covers every chain (BSC = chainid 56).
+    The old per-explorer V1 endpoints (api.bscscan.com) are deprecated.
+    """
+    r = requests.get("https://api.etherscan.io/v2/api", params={
+        "chainid": chain.evm_chain_id, "module": "account", "action": "tokentx",
+        "address": owner, "page": 1, "offset": 2000, "sort": "desc", "apikey": key,
+    }, timeout=_TIMEOUT)
+    r.raise_for_status()
+    body = r.json()
+    result = body.get("result")
+    if isinstance(result, list):
+        return result  # valid response (possibly an empty history)
+    # A string result means an API error (e.g. "Invalid API Key").
+    raise RuntimeError(f"{body.get('message')}: {result}")
 
 
 def held_tokens(chain: chains.Chain, owner: str) -> list[dict]:
