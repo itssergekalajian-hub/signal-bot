@@ -137,27 +137,51 @@ async def on_channel_message(event):
 
 
 async def _positions_report() -> str:
-    """Build the /positions summary: ROI + current value per open holding."""
+    """/positions summary using the REAL on-chain balance as the source of truth.
+
+    Positions whose wallet balance is 0 (ghosts from reverted buys, or ones you
+    already sold) are pruned so the list always matches the blockchain.
+    """
     open_pos = positions.open_positions()
     if not open_pos:
         return "📭 No open positions."
 
     lines = ["📊 *Open positions*\n"]
     total_val = 0.0
+    shown = 0
+    pruned = 0
     for p in open_pos:
+        if p.dry_run:
+            raw, dec = p.token_raw, p.decimals          # simulated — trust the ledger
+        else:
+            try:
+                raw, dec = await asyncio.to_thread(executor.token_balance, p.address, p.chain)
+            except Exception:  # noqa: BLE001
+                raw, dec = p.token_raw, p.decimals      # RPC hiccup — fall back, don't prune
+        if raw <= 0:
+            positions.update(p.address, p.opened_at, token_raw=0, notes="0 on-chain (pruned)")
+            pruned += 1
+            continue
+
         cur = await asyncio.to_thread(market.price_usd, p.address)
-        tokens = p.token_raw / (10 ** p.decimals)
+        tokens = raw / (10 ** (dec or p.decimals))
         val = tokens * cur if cur else 0.0
         total_val += val
+        shown += 1
         roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
-        state = "½ sold @2x" if p.tp1_done else "open"
         tag = " (dry)" if p.dry_run else ""
-        lines.append(
-            f"• *{p.symbol}* ({p.chain}){tag} — {roi:+.0f}%  ~${val:.2f}  [{state}]\n"
-            f"  entry ${p.entry_price_usd:.6g} → now ${cur:.6g}" if cur
-            else f"• *{p.symbol}* ({p.chain}){tag} — price unavailable  [{state}]"
-        )
-    lines.append(f"\n💰 Total open value: ~${total_val:.2f}")
+        if cur:
+            lines.append(f"• *{p.symbol}* ({p.chain}){tag} — {roi:+.0f}%  ~${val:.2f}\n"
+                         f"  entry ${p.entry_price_usd:.6g} → now ${cur:.6g}")
+        else:
+            lines.append(f"• *{p.symbol}* ({p.chain}){tag} — held, price unavailable")
+
+    if shown == 0:
+        return ("📭 No open positions — the blockchain shows 0 balance for the tracked "
+                f"tokens (removed {pruned} ghost{'s' if pruned != 1 else ''}).")
+    lines.append(f"\n💰 Total value: ~${total_val:.2f}")
+    if pruned:
+        lines.append(f"_(removed {pruned} with 0 on-chain balance)_")
     return "\n".join(lines)
 
 

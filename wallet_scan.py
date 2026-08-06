@@ -27,15 +27,21 @@ def _token_transfers(chain: chains.Chain, owner: str, key: str) -> list:
         ("https://api.etherscan.io/v2/api", {"chainid": chain.evm_chain_id}),
         ("https://api.bscscan.com/api", {}),
     ]
+    last_err = None
     for base, extra in endpoints:
         try:
             r = requests.get(base, params={**base_params, **extra}, timeout=_TIMEOUT)
             r.raise_for_status()
-            result = r.json().get("result")
-            if isinstance(result, list) and result:
-                return result
-        except Exception:  # noqa: BLE001
-            continue
+            body = r.json()
+            result = body.get("result")
+            if isinstance(result, list):
+                return result  # valid response (possibly an empty history)
+            # result is a string here -> an API error (e.g. "Invalid API Key")
+            last_err = f"{body.get('message')}: {result}"
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)
+    if last_err:
+        raise RuntimeError(last_err)  # surface it instead of silent "no tokens"
     return []
 
 
