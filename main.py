@@ -252,27 +252,33 @@ async def _send_sell_cards() -> bool:
     return True
 
 
+def _wallet_help() -> str:
+    """How to see/sell your wallet when the auto-scan provider isn't available."""
+    owner = executor.wallet_address("bsc") or "your_wallet"
+    return (
+        "🔍 Wallet auto-scan needs a paid BSC data plan, so it's off. "
+        "You don't need it — here's how to see and sell everything:\n"
+        "• */positions* — every token the bot bought, with P&L\n"
+        "• */sell 0x…* — sell any token by pasting its contract address\n"
+        f"• Full list in your browser: bscscan.com/address/{owner} → *Token Holdings*"
+    )
+
+
 @bot_client.on(events.NewMessage(pattern=r"^/scan", from_users=config.TG_OWNER_ID))
 async def on_scan_cmd(event):
-    """Scan the wallet for tokens it actually holds (via explorer), each sellable."""
-    if not config.BSCSCAN_API_KEY:
-        await event.reply("To scan your wallet, add a free key to .env as BSCSCAN_API_KEY "
-                          "— get it at etherscan.io/apis (one Etherscan key covers BSC). "
-                          "Until then, sell by address: `/sell 0x…`")
-        return
+    """Auto-list wallet tokens if a working explorer key is set; else guide."""
     owner = executor.wallet_address("bsc")
-    if not owner:
-        await event.reply("No EVM wallet configured.")
+    if not config.BSCSCAN_API_KEY or not owner:
+        await event.reply(_wallet_help())
         return
     await event.reply("🔍 Scanning your wallet on BSC…")
-    chain = chains.get("bsc")
     try:
-        held = await asyncio.to_thread(wallet_scan.held_tokens, chain, owner)
-    except Exception as e:  # noqa: BLE001
-        await event.reply(f"Scan failed: {e}")
+        held = await asyncio.to_thread(wallet_scan.held_tokens, chains.get("bsc"), owner)
+    except Exception:  # noqa: BLE001 — key rejected / chain not on plan
+        await event.reply(_wallet_help())
         return
     if not held:
-        await event.reply("No tokens with a balance found on BSC.")
+        await event.reply("No tokens with a balance found on BSC. (Try /positions.)")
         return
     for h in held:
         amt = h["raw"] / (10 ** h["decimals"])
