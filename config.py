@@ -58,7 +58,7 @@ DRY_RUN        = _b("DRY_RUN", True)      # true = never actually swaps
 AUTO_TRADE     = _b("AUTO_TRADE", False)  # true = buy on pass; false = Buy/Skip button
 BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "10"))  # USD per buy, any chain
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
-SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "500"))  # 5% exits
+SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "1000"))  # 10% exits (tax tokens)
 
 # four.meme launchpad (BSC): trade tokens still on the bonding curve, which 0x
 # can't reach until they graduate to PancakeSwap. Routed automatically.

@@ -104,11 +104,25 @@ def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.sell(address, raw_amount)
+
+    # four.meme on-curve tokens
     if chain.key == "bsc":
         import fourmeme
         info = fourmeme.token_info(address)
         if info and info["on_curve"]:
+            if config.HONEYPOT_CHECK:
+                ok, _tax, reason = fourmeme.sellable(address)
+                if not ok:
+                    return SwapResult(False, f"⛔ {reason} — sell not attempted (no gas spent)")
             return fourmeme.sell(address, raw_amount, info)
+
+    # DEX / 0x path — refuse to burn gas on a confirmed honeypot
+    if config.HONEYPOT_CHECK:
+        import honeypot
+        res = honeypot.check(chain, address)
+        if res and res.get("sim_ok") and res.get("is_honeypot"):
+            return SwapResult(False, "⛔ honeypot — simulated sell fails, not attempted (no gas spent)")
+
     import evm_executor
     return evm_executor.sell(chain, address, raw_amount)
 
