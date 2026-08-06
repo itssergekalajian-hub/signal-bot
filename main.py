@@ -190,11 +190,6 @@ async def on_positions(event):
     await event.reply(await _positions_report())
 
 
-@bot_client.on(events.NewMessage(pattern=r"^/help", from_users=config.TG_OWNER_ID))
-async def on_help(event):
-    await event.reply(_help_text())
-
-
 def _sell_button(address: str, chain: str, symbol: str, subtitle: str) -> None:
     """Register a pending sell and DM the owner a Sell 50% / 100% card."""
     sid = secrets.token_hex(4)
@@ -321,24 +316,14 @@ async def _wallet_report() -> str:
     return "\n".join(lines)
 
 
-def _help_text() -> str:
-    return (
-        "*Commands*\n"
-        "• /menu — button menu\n"
-        "• /wallet — total wallet value (coin + tokens)\n"
-        "• /positions — open holdings, ROI, value\n"
-        "• /sell — sell a tracked position (50%/100%)\n"
-        "• /sell <address> — sell any token by contract\n"
-        "• /scan — list every token in your wallet\n"
-        "• /pause · /resume — stop / start auto-buying\n"
-        "• /help — this message\n\n"
-        f"Mode: {'DRY_RUN' if config.DRY_RUN else 'LIVE'} · "
-        f"{'AUTO' if config.AUTO_TRADE else 'manual'} · "
-        f"{'⏸ PAUSED' if _state['paused'] else '▶️ active'} · "
-        f"${config.BUY_AMOUNT_USD:g}/buy · "
-        + (f"TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@{config.TAKE_PROFIT_MULT:g}x"
-           if config.TAKE_PROFIT_ENABLED else "manual sell only")
-    )
+def _menu_title() -> str:
+    state = "⏸ PAUSED" if _state["paused"] else "▶️ active"
+    mode = f"{'DRY_RUN' if config.DRY_RUN else 'LIVE'} · {'AUTO' if config.AUTO_TRADE else 'manual'}"
+    tp = (f"TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@{config.TAKE_PROFIT_MULT:g}x"
+          if config.TAKE_PROFIT_ENABLED else "manual sell")
+    return (f"🤖 *Signal bot* — {state}\n"
+            f"{mode} · ${config.BUY_AMOUNT_USD:g}/buy · {tp}\n"
+            f"Pick an action:")
 
 
 def _menu_markup():
@@ -348,15 +333,13 @@ def _menu_markup():
          Button.inline("💼 Wallet", b"menu:wallet")],
         [Button.inline("💸 Sell", b"menu:sell"),
          Button.inline("🔍 Scan", b"menu:scan")],
-        [Button.inline(toggle, b"menu:toggle"),
-         Button.inline("❓ Help", b"menu:help")],
+        [Button.inline(toggle, b"menu:toggle")],
     ]
 
 
 @bot_client.on(events.NewMessage(pattern=r"^/(menu|start)", from_users=config.TG_OWNER_ID))
 async def on_menu(event):
-    state = "⏸ PAUSED" if _state["paused"] else "▶️ active"
-    await event.reply(f"🤖 *Signal bot* — {state}\nPick an action:", buttons=_menu_markup())
+    await event.reply(_menu_title(), buttons=_menu_markup())
 
 
 @bot_client.on(events.NewMessage(pattern=r"^/wallet", from_users=config.TG_OWNER_ID))
@@ -430,15 +413,12 @@ async def on_click(event):
                 await event.respond("📭 No tracked positions. Use `/sell <address>` or /scan.")
         elif what == "scan":
             await on_scan_cmd(event)
-        elif what == "help":
-            await event.respond(_help_text())
         elif what == "toggle":
             _state["paused"] = not _state["paused"]
-            state = "⏸ PAUSED" if _state["paused"] else "▶️ active"
             try:
-                await event.edit(f"🤖 *Signal bot* — {state}\nPick an action:", buttons=_menu_markup())
+                await event.edit(_menu_title(), buttons=_menu_markup())
             except Exception:  # noqa: BLE001
-                await event.respond(f"Now {state}.")
+                await event.respond("⏸ Paused." if _state["paused"] else "▶️ Resumed.")
         return
 
     # ---- manual sell:  sell:<sid>:<pct> ----
@@ -488,7 +468,7 @@ async def _register_commands():
             ("menu", "Button menu"), ("wallet", "Total wallet value"),
             ("positions", "Open positions"), ("sell", "Sell a position"),
             ("scan", "Scan wallet tokens"), ("pause", "Pause auto-buying"),
-            ("resume", "Resume auto-buying"), ("help", "Help"),
+            ("resume", "Resume auto-buying"),
         ]
         await bot_client(functions.bots.SetBotCommandsRequest(
             scope=types.BotCommandScopeDefault(), lang_code="",
@@ -513,7 +493,7 @@ async def main():
         f"🤖 Online. Mode: *{mode}*.\n"
         f"Watching {len(config.TG_CHANNELS)} channel(s): {config.TG_CHANNEL_DISPLAY}.\n"
         f"Buy size ${config.BUY_AMOUNT_USD:g} · {tp}\n"
-        f"Send /menu for controls · /help for commands."
+        f"Send /menu for controls."
     )
 
     tasks = [

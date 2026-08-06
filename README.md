@@ -122,7 +122,7 @@ DM these to your bot (they also appear in Telegram's `/` menu):
 - **/scan** — list every token actually held in the wallet (via an explorer),
   each with sell buttons. Needs a free `BSCSCAN_API_KEY` from etherscan.io/apis
   (one Etherscan V2 key covers BSC; the old bscscan.com API is deprecated).
-- **/help** — quick command list and the current mode/settings.
+- **/menu** — button menu with everything above, plus the current mode/settings.
 
 All selling uses your **live on-chain balance** as the source of truth, and a
 swap that reverts on-chain is reported as a failure (never a false success).
