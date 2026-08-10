@@ -71,8 +71,11 @@ def _quote(chain: chains.Chain, sell_token: str, buy_token: str,
     return r.json()
 
 
-def _send(w3, acct, chain: chains.Chain, tx_fields: dict) -> str:
-    """Sign + broadcast a tx dict from a 0x quote (or a built approve)."""
+def _send(w3, acct, chain: chains.Chain, tx_fields: dict, gas_mult: float = 1.0) -> str:
+    """Sign + broadcast a tx dict from a 0x quote (or a built approve).
+
+    gas_mult scales the gas price up (used on sells so exits land fast).
+    """
     tx = {
         "from": acct.address,
         "to": w3.to_checksum_address(tx_fields["to"]),
@@ -85,7 +88,8 @@ def _send(w3, acct, chain: chains.Chain, tx_fields: dict) -> str:
         tx["gas"] = int(tx_fields["gas"])
     else:
         tx["gas"] = w3.eth.estimate_gas(tx)
-    tx["gasPrice"] = int(tx_fields.get("gasPrice") or w3.eth.gas_price)
+    base_gas_price = int(tx_fields.get("gasPrice") or w3.eth.gas_price)
+    tx["gasPrice"] = int(base_gas_price * gas_mult)
 
     signed = acct.sign_transaction(tx)
     # eth-account renamed this attribute (rawTransaction -> raw_transaction);
@@ -145,7 +149,7 @@ def sell(chain: chains.Chain, address: str, raw_amount: int) -> SwapResult:
         if not tx_fields:
             return SwapResult(False, f"no route: {q.get('reason') or q.get('message') or q}")
         _approve_if_needed(w3, acct, chain, address, q)
-        txh = _send(w3, acct, chain, tx_fields)
+        txh = _send(w3, acct, chain, tx_fields, gas_mult=config.SELL_GAS_MULT)
     except Exception as e:  # noqa: BLE001 — surface any failure as a clean result
         return SwapResult(False, f"sell failed: {e}")
     return SwapResult(True, f"filled — {chain.explorer_tx}{txh}", txh)

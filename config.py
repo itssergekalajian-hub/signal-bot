@@ -57,9 +57,12 @@ JUPITER_API_KEY = os.getenv("JUPITER_API_KEY", "")
 # ── Execution ──────────────────────────────────────────────────────────
 DRY_RUN        = _b("DRY_RUN", True)      # true = never actually swaps
 AUTO_TRADE     = _b("AUTO_TRADE", False)  # true = buy on pass; false = Buy/Skip button
-BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "10"))  # USD per buy, any chain
+BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "2"))   # USD per buy, any chain
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
-SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "1000"))  # 10% exits (tax tokens)
+SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "1500"))  # 15% exits — get out fast
+# Bump gas on sells so exits land quickly (like a fast UI). 1.3 = 30% over the
+# network's suggested gas price.
+SELL_GAS_MULT     = float(os.getenv("SELL_GAS_MULT", "1.3"))
 
 # four.meme launchpad (BSC): trade tokens still on the bonding curve, which 0x
 # can't reach until they graduate to PancakeSwap. Routed automatically.
@@ -83,6 +86,13 @@ TAKE_PROFIT_MULT     = float(os.getenv("TAKE_PROFIT_MULT", "2.0"))
 TAKE_PROFIT_SELL_PCT = float(os.getenv("TAKE_PROFIT_SELL_PCT", "50"))
 POLL_INTERVAL_SEC    = int(os.getenv("POLL_INTERVAL_SEC", "30"))
 POSITIONS_FILE       = os.getenv("POSITIONS_FILE", "positions.json")
+
+# ── Rug / stop-loss auto-sell ──────────────────────────────────────────
+# If a position falls STOP_LOSS_PCT below entry, auto-sell 100% to cut the loss
+# before it goes to zero. 0 = off. NOTE: polling can't beat an instant liquidity
+# pull (the token is already 0/unsellable by the next check) — this catches
+# gradual bleeds and gives-backs, not one-block rugs.
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "0"))
 
 # ── Safety gate ────────────────────────────────────────────────────────
 MIN_LIQUIDITY_USD = float(os.getenv("MIN_LIQUIDITY_USD", "5000"))

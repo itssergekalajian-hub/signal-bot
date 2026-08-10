@@ -152,11 +152,13 @@ def sell(address: str, raw_amount: int, info: dict | None = None) -> SwapResult:
         token = w3.eth.contract(address=token_cs, abi=_APPROVE_ABI)
         approve_data = token.encode_abi("approve",
                                         args=[w3.to_checksum_address(tm_addr), raw_amount])
-        evm_executor._send(w3, acct, chain, {"to": address, "data": approve_data})
+        evm_executor._send(w3, acct, chain, {"to": address, "data": approve_data},
+                           gas_mult=config.SELL_GAS_MULT)
         # 2) sell on the curve
         tm = w3.eth.contract(address=w3.to_checksum_address(tm_addr), abi=_TM_ABI)
         sell_data = tm.encode_abi("sellToken", args=[token_cs, raw_amount])
-        txh = evm_executor._send(w3, acct, chain, {"to": tm_addr, "data": sell_data})
+        txh = evm_executor._send(w3, acct, chain, {"to": tm_addr, "data": sell_data},
+                                 gas_mult=config.SELL_GAS_MULT)
     except Exception as e:  # noqa: BLE001
         return SwapResult(False, f"four.meme sell failed: {e}")
     return SwapResult(True, f"filled (four.meme) — {chain.explorer_tx}{txh}", txh)

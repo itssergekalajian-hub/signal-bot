@@ -56,8 +56,8 @@ def record_buy(address: str, chain: str, symbol: str, amount_usd: float,
     return pos
 
 
-def _sell_amount(pos: positions.Position) -> int:
-    """How many raw tokens to sell for the take-profit trim."""
+def _sell_amount(pos: positions.Position, pct: float) -> int:
+    """How many raw tokens to sell (pct% of the live balance)."""
     held = pos.token_raw
     if not config.DRY_RUN:
         try:
@@ -65,22 +65,46 @@ def _sell_amount(pos: positions.Position) -> int:
             held = live  # on-chain balance is the source of truth
         except Exception:  # noqa: BLE001
             pass
-    return int(held * (config.TAKE_PROFIT_SELL_PCT / 100.0))
+    return int(held * (pct / 100.0))
+
+
+async def _emergency_exit(pos: positions.Position, ratio: float, current: float, notify) -> None:
+    """Rug/stop-loss: sell 100% and close the position."""
+    down = (1 - ratio) * 100
+    sell_raw = _sell_amount(pos, 100)
+    if sell_raw <= 0:
+        positions.update(pos.address, pos.opened_at, token_raw=0, notes="stop-loss: no balance")
+        return
+    await notify(f"🛑 *Stop-loss* {pos.symbol} ({pos.chain}) down {down:.0f}% "
+                 f"(entry ${pos.entry_price_usd:.6g} → ${current:.6g}) — selling everything…")
+    res = await asyncio.to_thread(executor.sell, pos.address, pos.chain, sell_raw)
+    if res.ok:
+        positions.update(pos.address, pos.opened_at, token_raw=0, notes=f"stop-loss at -{down:.0f}%")
+        await notify(f"✅ Exited {pos.symbol}: {res.detail}")
+    else:
+        await notify(f"❌ Stop-loss sell failed for {pos.symbol}: {res.detail}\n"
+                     f"(likely already rugged / un-sellable)")
 
 
 async def _check_once(notify) -> None:
     for pos in positions.open_positions():
-        if pos.tp1_done:
-            continue
         current = await asyncio.to_thread(price_usd, pos.address)
-        if current is None:
+        if current is None or not pos.entry_price_usd:
+            continue
+        ratio = current / pos.entry_price_usd
+
+        # ---- rug / stop-loss: sell 100% and close ----
+        if config.STOP_LOSS_PCT > 0 and ratio <= (1 - config.STOP_LOSS_PCT / 100.0):
+            await _emergency_exit(pos, ratio, current, notify)
             continue
 
-        ratio = current / pos.entry_price_usd
+        # ---- take-profit: sell a slice once at the target ----
+        if not config.TAKE_PROFIT_ENABLED or pos.tp1_done:
+            continue
         if ratio < config.TAKE_PROFIT_MULT:
             continue
 
-        sell_raw = _sell_amount(pos)
+        sell_raw = _sell_amount(pos, config.TAKE_PROFIT_SELL_PCT)
         if sell_raw <= 0:
             positions.update(pos.address, pos.opened_at, tp1_done=True,
                              notes="TP reached but no balance to sell")

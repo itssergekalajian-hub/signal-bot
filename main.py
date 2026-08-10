@@ -485,9 +485,12 @@ async def main():
     dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real funds"
     auto = "AUTO buy" if config.AUTO_TRADE else "manual confirm"
     mode = f"{dry} · {auto}"
-    tp = (f"Take-profit: sell {config.TAKE_PROFIT_SELL_PCT:.0f}% at "
-          f"{config.TAKE_PROFIT_MULT:g}x." if config.TAKE_PROFIT_ENABLED
-          else "Selling: manual only (no auto take-profit / stop-loss).")
+    sell_bits = []
+    if config.TAKE_PROFIT_ENABLED:
+        sell_bits.append(f"TP {config.TAKE_PROFIT_SELL_PCT:.0f}%@{config.TAKE_PROFIT_MULT:g}x")
+    if config.STOP_LOSS_PCT > 0:
+        sell_bits.append(f"stop-loss -{config.STOP_LOSS_PCT:g}%")
+    tp = ("Selling: " + " · ".join(sell_bits)) if sell_bits else "Selling: manual only"
     print(f"Bot running: {mode}. Watching {config.TG_CHANNEL_DISPLAY}.")
     await _notify(
         f"🤖 Online. Mode: *{mode}*.\n"
@@ -500,8 +503,8 @@ async def main():
         user_client.run_until_disconnected(),
         bot_client.run_until_disconnected(),
     ]
-    if config.TAKE_PROFIT_ENABLED:
-        tasks.append(monitor.run(_notify))  # background take-profit loop
+    if config.TAKE_PROFIT_ENABLED or config.STOP_LOSS_PCT > 0:
+        tasks.append(monitor.run(_notify))  # background take-profit / stop-loss loop
     await asyncio.gather(*tasks)
 
 
