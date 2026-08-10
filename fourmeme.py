@@ -86,6 +86,17 @@ def token_info(address: str) -> dict | None:
     return {"token_manager": token_manager, "on_curve": not liquidity_added, "version": version}
 
 
+def buyable(address: str) -> bool:
+    """True if the token is on a four.meme curve (tryBuy quotes a non-zero amount)."""
+    try:
+        w3, _ = _bsc()
+        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
+        q = helper.functions.tryBuy(w3.to_checksum_address(address), 0, 10 ** 16).call()
+        return int(q[0], 16) != 0 and int(q[2]) > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def sellable(address: str) -> tuple[bool, float | None, str]:
     """Can this on-curve token be sold? Returns (ok, sell_tax_pct, reason).
 
@@ -107,21 +118,30 @@ def sellable(address: str) -> tuple[bool, float | None, str]:
     return (True, tax, "")
 
 
-def buy(address: str, amount_native: float, info: dict | None = None) -> SwapResult:
-    """Buy `address` on the four.meme curve, spending ~amount_native BNB."""
+def buy(address: str, amount_native: float, info: dict | None = None):
+    """Buy `address` on the four.meme curve, spending ~amount_native BNB.
+
+    Returns None if the token is NOT on a four.meme curve (tryBuy reverts or
+    quotes zero) — the dispatcher then falls back to the 0x/DEX path. Returns a
+    SwapResult once we commit to (and send) a four.meme transaction.
+    """
     import evm_executor
+    try:
+        w3, chain = _bsc()
+        funds_wei = int(amount_native * (10 ** 18))
+        token_cs = w3.to_checksum_address(address)
+        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
+        q = helper.functions.tryBuy(token_cs, 0, funds_wei).call()
+        token_manager, est_amount, msg_value = q[0], int(q[2]), int(q[5])
+    except Exception:  # noqa: BLE001 — not a four.meme-curve token; use the DEX
+        return None
+    if int(token_manager, 16) == 0 or est_amount <= 0:
+        return None  # not buyable on the curve -> caller falls back to 0x
+
     if not config.EVM_PRIVATE_KEY:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
     try:
-        w3, chain = _bsc()
         acct = evm_executor._account()
-        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
-        funds_wei = int(amount_native * (10 ** 18))
-        token_cs = w3.to_checksum_address(address)
-        q = helper.functions.tryBuy(token_cs, 0, funds_wei).call()
-        token_manager, est_amount, msg_value = q[0], int(q[2]), int(q[5])
-        if int(token_manager, 16) == 0 or est_amount <= 0:
-            return SwapResult(False, "four.meme: token not buyable on the curve")
         min_amount = est_amount * (10_000 - config.FOURMEME_SLIPPAGE_BPS) // 10_000
         tm = w3.eth.contract(address=w3.to_checksum_address(token_manager), abi=_TM_ABI)
         data = tm.encode_abi("buyTokenAMAP", args=[token_cs, funds_wei, min_amount])
@@ -133,21 +153,32 @@ def buy(address: str, amount_native: float, info: dict | None = None) -> SwapRes
                       out_amount=est_amount)
 
 
-def sell(address: str, raw_amount: int, info: dict | None = None) -> SwapResult:
-    """Sell `raw_amount` base units of `address` back to BNB on the curve."""
+def sell(address: str, raw_amount: int, info: dict | None = None):
+    """Sell `raw_amount` base units of `address` back to BNB on the curve.
+
+    Returns None if the token is NOT sellable on a four.meme curve (trySell
+    reverts / quotes zero) so the dispatcher can fall back to the 0x/DEX path.
+    """
     import evm_executor
+    try:
+        w3, chain = _bsc()
+        token_cs = w3.to_checksum_address(address)
+        probe = raw_amount if raw_amount > 0 else 10 ** 18
+        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
+        q = helper.functions.trySell(token_cs, probe).call()
+        token_manager, funds = q[0], int(q[2])
+    except Exception:  # noqa: BLE001 — not a four.meme-curve token; use the DEX
+        return None
+    if int(token_manager, 16) == 0 or funds <= 0:
+        return None
+
     if not config.EVM_PRIVATE_KEY:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
     if raw_amount <= 0:
         return SwapResult(False, "nothing to sell (zero balance)")
-    info = info or token_info(address)
-    if not info:
-        return SwapResult(False, "four.meme: token not on the curve")
     try:
-        w3, chain = _bsc()
         acct = evm_executor._account()
-        tm_addr = info["token_manager"]
-        token_cs = w3.to_checksum_address(address)
+        tm_addr = token_manager
         # 1) approve the TokenManager to move our tokens
         token = w3.eth.contract(address=token_cs, abi=_APPROVE_ABI)
         approve_data = token.encode_abi("approve",

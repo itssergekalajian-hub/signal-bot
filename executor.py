@@ -75,13 +75,13 @@ def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.buy(address, amount_native)
-    # BSC: a four.meme token still on its bonding curve can't be traded by 0x
-    # until it graduates — route those through four.meme.
+    # BSC: try four.meme first (it decides via tryBuy). None => not a curve
+    # token, fall back to the 0x/DEX path.
     if chain.key == "bsc":
         import fourmeme
-        info = fourmeme.token_info(address)
-        if info and info["on_curve"]:
-            return fourmeme.buy(address, amount_native, info)
+        fm = fourmeme.buy(address, amount_native)
+        if fm is not None:
+            return fm
     import evm_executor
     return evm_executor.buy(chain, address, amount_native)
 
@@ -105,16 +105,12 @@ def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
         import solana_executor
         return solana_executor.sell(address, raw_amount)
 
-    # four.meme on-curve tokens
+    # BSC: try four.meme first (decides via trySell). None => not a curve token.
     if chain.key == "bsc":
         import fourmeme
-        info = fourmeme.token_info(address)
-        if info and info["on_curve"]:
-            if config.HONEYPOT_CHECK:
-                ok, _tax, reason = fourmeme.sellable(address)
-                if not ok:
-                    return SwapResult(False, f"⛔ {reason} — sell not attempted (no gas spent)")
-            return fourmeme.sell(address, raw_amount, info)
+        fm = fourmeme.sell(address, raw_amount)
+        if fm is not None:
+            return fm
 
     # DEX / 0x path — refuse to burn gas on a confirmed honeypot
     if config.HONEYPOT_CHECK:

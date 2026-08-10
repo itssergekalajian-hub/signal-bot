@@ -147,25 +147,23 @@ def _check_sellability(v: Verdict, chain: chains.Chain) -> None:
     if not config.HONEYPOT_CHECK:
         return
 
-    # four.meme on-curve tokens have no DEX pool yet -> use four.meme's trySell.
+    # four.meme on-curve tokens have no DEX pool yet -> use four.meme's own
+    # quotes (trySell to prove sellability, tryBuy to confirm it's a curve token).
     if chain.key == "bsc":
-        try:
-            import fourmeme
-            info = fourmeme.token_info(v.address)
-        except Exception:  # noqa: BLE001
-            info = None
-        if info and info.get("on_curve"):
-            ok, tax, reason = fourmeme.sellable(v.address)
-            if not ok:
-                v.passed = False
-                v.reasons.append(reason)
-                return
+        import fourmeme
+        ok, tax, _reason = fourmeme.sellable(v.address)
+        if ok:  # it's a four.meme curve token AND sellable
             if tax is not None:
                 v.info["sell_tax_pct"] = round(tax, 1)
                 if tax > config.MAX_HONEYPOT_TAX_PCT:
                     v.passed = False
                     v.reasons.append(f"sell tax {tax:.0f}% > {config.MAX_HONEYPOT_TAX_PCT:.0f}%")
             return
+        if fourmeme.buyable(v.address):  # four.meme token but can't sell -> honeypot
+            v.passed = False
+            v.reasons.append("four.meme: can't sell it back (honeypot)")
+            return
+        # else: not a four.meme token -> fall through to the DEX honeypot check
 
     # DEX / graduated tokens -> honeypot.is simulates a real buy+sell.
     import honeypot
