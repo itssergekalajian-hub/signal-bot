@@ -29,6 +29,7 @@ class Position:
     decimals: int
     opened_at: float                # unix seconds
     tp1_done: bool = False          # has the 2x / 50% take-profit already fired?
+    sl_tried: bool = False          # has the stop-loss already been attempted?
     dry_run: bool = True            # was this opened in DRY_RUN?
     notes: str = ""
 

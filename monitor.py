@@ -79,11 +79,16 @@ async def _emergency_exit(pos: positions.Position, ratio: float, current: float,
                  f"(entry ${pos.entry_price_usd:.6g} → ${current:.6g}) — selling everything…")
     res = await asyncio.to_thread(executor.sell, pos.address, pos.chain, sell_raw)
     if res.ok:
-        positions.update(pos.address, pos.opened_at, token_raw=0, notes=f"stop-loss at -{down:.0f}%")
+        positions.update(pos.address, pos.opened_at, token_raw=0, sl_tried=True,
+                         notes=f"stop-loss at -{down:.0f}%")
         await notify(f"✅ Exited {pos.symbol}: {res.detail}")
     else:
-        await notify(f"❌ Stop-loss sell failed for {pos.symbol}: {res.detail}\n"
-                     f"(likely already rugged / un-sellable)")
+        # Mark tried so we DON'T retry every poll (that was the spam bug). A rug
+        # that can't be sold stays put; you can still try /sell manually later.
+        positions.update(pos.address, pos.opened_at, sl_tried=True,
+                         notes=f"stop-loss failed at -{down:.0f}%: {res.detail[:60]}")
+        await notify(f"❌ Stop-loss couldn't sell {pos.symbol} (likely rugged / un-sellable). "
+                     f"Won't retry.")
 
 
 async def _check_once(notify) -> None:
@@ -93,8 +98,9 @@ async def _check_once(notify) -> None:
             continue
         ratio = current / pos.entry_price_usd
 
-        # ---- rug / stop-loss: sell 100% and close ----
-        if config.STOP_LOSS_PCT > 0 and ratio <= (1 - config.STOP_LOSS_PCT / 100.0):
+        # ---- rug / stop-loss: sell 100% and close (only ONE attempt) ----
+        if (config.STOP_LOSS_PCT > 0 and not pos.sl_tried
+                and ratio <= (1 - config.STOP_LOSS_PCT / 100.0)):
             await _emergency_exit(pos, ratio, current, notify)
             continue
 
