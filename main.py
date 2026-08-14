@@ -360,6 +360,33 @@ async def on_resume(event):
     await event.reply("▶️ Resumed — watching for calls again.")
 
 
+@bot_client.on(events.NewMessage(pattern=r"^/diag", from_users=config.TG_OWNER_ID))
+async def on_diag(event):
+    """/diag 0x… — probe how a token routes (four.meme vs 0x) and why it fails."""
+    parts = event.raw_text.split()
+    if len(parts) < 2 or not parts[1].lower().startswith("0x"):
+        await event.reply("Usage: `/diag 0x<token address>`")
+        return
+    addr = parts[1].strip().lower()
+    await event.reply("🔬 Probing…")
+    import fourmeme
+    m = await asyncio.to_thread(market.lookup, addr)
+    chain = m.chain if m else "bsc"
+    try:
+        raw, dec = await asyncio.to_thread(executor.token_balance, addr, chain)
+    except Exception as e:  # noqa: BLE001
+        raw, dec = f"err {e}", "?"
+    d = await asyncio.to_thread(fourmeme.diagnose, addr)
+    lines = [f"🔬 `{addr}`"]
+    lines.append(f"market: {m.chain} · liq ${m.liquidity_usd:,.0f} · ${m.price_usd}" if m
+                 else "market: none (DexScreener)")
+    lines.append(f"balance raw: {raw} · decimals: {dec}")
+    lines.append("four.meme Helper:")
+    for k, v in d.items():
+        lines.append(f"  • {k}: {v}")
+    await event.reply("\n".join(lines))
+
+
 async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> str:
     """Sell pct% of the wallet's live on-chain balance of a token."""
     try:

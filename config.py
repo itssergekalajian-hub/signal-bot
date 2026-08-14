@@ -59,7 +59,7 @@ DRY_RUN        = _b("DRY_RUN", True)      # true = never actually swaps
 AUTO_TRADE     = _b("AUTO_TRADE", False)  # true = buy on pass; false = Buy/Skip button
 BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "2"))   # USD per buy, any chain
 SLIPPAGE_BPS      = int(os.getenv("SLIPPAGE_BPS", "300"))   # 3% entries
-SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "1500"))  # 15% exits — get out fast
+SELL_SLIPPAGE_BPS = int(os.getenv("SELL_SLIPPAGE_BPS", "2500"))  # 25% exits — get out even on thin/taxed pools
 # Bump gas on sells so exits land quickly (like a fast UI). 1.3 = 30% over the
 # network's suggested gas price.
 SELL_GAS_MULT     = float(os.getenv("SELL_GAS_MULT", "1.3"))

@@ -86,6 +86,37 @@ def token_info(address: str) -> dict | None:
     return {"token_manager": token_manager, "on_curve": not liquidity_added, "version": version}
 
 
+def diagnose(address: str) -> dict:
+    """Read-only probe of four.meme's Helper for a token — for /diag debugging.
+
+    Shows exactly what tryBuy / trySell / getTokenInfo return (or the revert),
+    which tells us whether four.meme routing should engage for this token.
+    """
+    out: dict = {}
+    try:
+        w3, _ = _bsc()
+        tok = w3.to_checksum_address(address)
+        helper = w3.eth.contract(address=w3.to_checksum_address(HELPER), abi=_HELPER_ABI)
+    except Exception as e:  # noqa: BLE001
+        return {"setup": f"ERROR: {e}"}
+    try:
+        q = helper.functions.tryBuy(tok, 0, 10 ** 16).call()
+        out["tryBuy"] = f"mgr={q[0][:10]}… est={int(q[2])} msgValue={int(q[5])}"
+    except Exception as e:  # noqa: BLE001
+        out["tryBuy"] = f"revert: {str(e)[:80]}"
+    try:
+        s = helper.functions.trySell(tok, 10 ** 18).call()
+        out["trySell"] = f"mgr={s[0][:10]}… funds={int(s[2])} fee={int(s[3])}"
+    except Exception as e:  # noqa: BLE001
+        out["trySell"] = f"revert: {str(e)[:80]}"
+    try:
+        info = helper.functions.getTokenInfo(tok).call()
+        out["getTokenInfo"] = f"version={int(info[0])} liquidityAdded={info[11]}"
+    except Exception as e:  # noqa: BLE001
+        out["getTokenInfo"] = f"revert: {str(e)[:80]}"
+    return out
+
+
 def buyable(address: str) -> bool:
     """True if the token is on a four.meme curve (tryBuy quotes a non-zero amount)."""
     try:
