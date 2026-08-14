@@ -159,7 +159,9 @@ async def _positions_report() -> str:
             except Exception:  # noqa: BLE001
                 raw, dec = p.token_raw, p.decimals      # RPC hiccup — fall back, don't prune
         if raw <= 0:
-            positions.update(p.address, p.opened_at, token_raw=0, notes="0 on-chain (pruned)")
+            # 0 on-chain: hide from the list, but DON'T delete — a flaky RPC read
+            # can transiently return 0 for a token you really hold. It reappears
+            # once the balance reads correctly.
             pruned += 1
             continue
 
@@ -177,11 +179,12 @@ async def _positions_report() -> str:
             lines.append(f"• *{p.symbol}* ({p.chain}){tag} — held, price unavailable")
 
     if shown == 0:
-        return ("📭 No open positions — the blockchain shows 0 balance for the tracked "
-                f"tokens (removed {pruned} ghost{'s' if pruned != 1 else ''}).")
+        return ("📭 Nothing showing right now — the tracked tokens read 0 on-chain "
+                f"({pruned} hidden). If you know you hold one, the RPC may be lagging; "
+                "try again, or use /sell <address>.")
     lines.append(f"\n💰 Total value: ~${total_val:.2f}")
     if pruned:
-        lines.append(f"_(removed {pruned} with 0 on-chain balance)_")
+        lines.append(f"_({pruned} hidden: 0 on-chain / RPC lag — not deleted)_")
     return "\n".join(lines)
 
 
@@ -394,15 +397,8 @@ async def _execute_sell(address: str, chain: str, pct: float, symbol: str) -> st
     except Exception as e:  # noqa: BLE001
         return f"❌ Couldn't read your on-chain balance: {e}"
     if held <= 0:
-        # Ghost position (e.g. a reverted buy recorded before the fix) — prune it
-        # so it stops showing in /positions and /sell.
-        pruned = False
-        for p in positions.load():
-            if p.address == address and p.token_raw:
-                positions.update(p.address, p.opened_at, token_raw=0, notes="0 on-chain (pruned)")
-                pruned = True
-        note = " (removed from your list)" if pruned else ""
-        return f"⚠️ You hold 0 {symbol} on-chain — nothing to sell{note}."
+        return (f"⚠️ 0 {symbol} on-chain right now — nothing to sell. If you *did* buy it, "
+                "the RPC may be lagging — try /sell again in a moment.")
     raw = int(held * (pct / 100.0))
     if raw <= 0:
         return "Nothing to sell (amount rounds to zero)."
