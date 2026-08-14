@@ -75,13 +75,16 @@ def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.buy(address, amount_native)
-    # BSC: try four.meme first (it decides via tryBuy). None => not a curve
-    # token, fall back to the 0x/DEX path.
+    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
     if chain.key == "bsc":
         import fourmeme
         fm = fourmeme.buy(address, amount_native)
         if fm is not None:
             return fm
+        import pancake
+        pk = pancake.buy(address, amount_native)
+        if pk is not None:
+            return pk
     import evm_executor
     return evm_executor.buy(chain, address, amount_native)
 
@@ -105,12 +108,16 @@ def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
         import solana_executor
         return solana_executor.sell(address, raw_amount)
 
-    # BSC: try four.meme first (decides via trySell). None => not a curve token.
+    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
     if chain.key == "bsc":
         import fourmeme
         fm = fourmeme.sell(address, raw_amount)
         if fm is not None:
             return fm
+        import pancake
+        pk = pancake.sell(address, raw_amount)
+        if pk is not None:
+            return pk
 
     # DEX / 0x path — refuse to burn gas on a confirmed honeypot
     if config.HONEYPOT_CHECK:
