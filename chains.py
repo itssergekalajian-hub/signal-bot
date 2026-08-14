@@ -47,9 +47,9 @@ _CHAINS: dict[str, Chain] = {
     "bsc": Chain(
         "bsc", "BNB Chain", "evm", 56,
         "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "BNB",
-        # PublicNode is steadier than the round-robin bsc-dataseed nodes (which
-        # sometimes return stale/0 balances). Override with BSC_RPC for a paid one.
-        "BSC_RPC", "https://bsc-rpc.publicnode.com",
+        # Binance's public seed node (proven working here). For best reliability
+        # set BSC_RPC to a paid endpoint (QuickNode/Ankr/Alchemy).
+        "BSC_RPC", "https://bsc-dataseed.binance.org",
         "https://bscscan.com/tx/",
     ),
     "arbitrum": Chain(

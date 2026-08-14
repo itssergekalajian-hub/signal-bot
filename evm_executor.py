@@ -161,7 +161,20 @@ def native_balance(chain: chains.Chain) -> float:
     if not owner:
         return 0.0
     w3 = _w3(chain)
-    return w3.eth.get_balance(w3.to_checksum_address(owner)) / 1e18
+    return _retry(lambda: w3.eth.get_balance(w3.to_checksum_address(owner))) / 1e18
+
+
+def _retry(fn, tries: int = 3, delay: float = 0.6):
+    """Retry a read call a few times — public RPCs occasionally error/rate-limit."""
+    import time
+    last = None
+    for _ in range(tries):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(delay)
+    raise last
 
 
 def token_balance(chain: chains.Chain, address: str) -> tuple[int, int]:
@@ -171,7 +184,7 @@ def token_balance(chain: chains.Chain, address: str) -> tuple[int, int]:
         return 0, 0
     w3 = _w3(chain)
     erc20 = w3.eth.contract(address=w3.to_checksum_address(address), abi=_ERC20_ABI)
-    raw = erc20.functions.balanceOf(w3.to_checksum_address(owner)).call()
+    raw = _retry(lambda: erc20.functions.balanceOf(w3.to_checksum_address(owner)).call())
     try:
         decimals = erc20.functions.decimals().call()
     except Exception:  # noqa: BLE001
