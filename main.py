@@ -159,9 +159,10 @@ async def _positions_report() -> str:
             except Exception:  # noqa: BLE001
                 raw, dec = p.token_raw, p.decimals      # RPC hiccup — fall back, don't prune
         if raw <= 0:
-            # 0 on-chain: hide from the list, but DON'T delete — a flaky RPC read
-            # can transiently return 0 for a token you really hold. It reappears
-            # once the balance reads correctly.
+            # Every RPC node reads 0 — sold or rugged. Delete it for good so the
+            # list only ever shows real, held tokens. (Dry-run rows trust the
+            # ledger above and never reach here.)
+            positions.remove(p.address, p.opened_at)
             pruned += 1
             continue
 
@@ -179,12 +180,8 @@ async def _positions_report() -> str:
             lines.append(f"• *{p.symbol}* ({p.chain}){tag} — held, price unavailable")
 
     if shown == 0:
-        return ("📭 Nothing showing right now — the tracked tokens read 0 on-chain "
-                f"({pruned} hidden). If you know you hold one, the RPC may be lagging; "
-                "try again, or use /sell <address>.")
+        return "📭 No open positions."
     lines.append(f"\n💰 Total value: ~${total_val:.2f}")
-    if pruned:
-        lines.append(f"_({pruned} hidden: 0 on-chain / RPC lag — not deleted)_")
     return "\n".join(lines)
 
 
@@ -248,29 +245,26 @@ async def _send_sell_cards() -> bool:
     if not open_pos:
         return False
 
-    sellable, empty = [], 0
+    sellable = []
     for p in open_pos:
         try:
             raw, _ = await asyncio.to_thread(executor.token_balance, p.address, p.chain)
-        except Exception:  # noqa: BLE001 — treat a read error as "unknown", keep the card
+        except Exception:  # noqa: BLE001 — read error is "unknown", keep it (don't delete)
             raw = -1
-        if raw == 0:
-            empty += 1
-            positions.update(p.address, p.opened_at, token_raw=0, notes="empty on-chain")
-        else:
+        if raw == 0 and not p.dry_run:
+            # Every RPC node agrees we hold 0 — it's sold or rugged. Purge it for
+            # good so it never clutters /sell or /positions again.
+            positions.remove(p.address, p.opened_at)
+        elif raw != 0:
             sellable.append(p)
 
     if not sellable:
-        note = f" ({empty} empty — already sold or rugged, hidden)" if empty else ""
         await bot_client.send_message(
             config.TG_OWNER_ID,
-            f"📭 Nothing to sell{note}. Use `/sell 0x…` to sell any token by address.")
+            "📭 Nothing to sell. Use `/sell 0x…` to sell any token by address.")
         return True
 
-    header = "Tap to sell a position:"
-    if empty:
-        header += f"\n_({empty} empty position{'s' if empty != 1 else ''} hidden)_"
-    await bot_client.send_message(config.TG_OWNER_ID, header)
+    await bot_client.send_message(config.TG_OWNER_ID, "Tap to sell a position:")
     for p in sellable:
         cur = await asyncio.to_thread(market.price_usd, p.address)
         roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0

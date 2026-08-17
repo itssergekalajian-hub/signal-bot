@@ -78,3 +78,10 @@ def update(address: str, opened_at: float, **changes) -> None:
             for k, v in changes.items():
                 setattr(p, k, v)
     save(positions)
+
+
+def remove(address: str, opened_at: float) -> None:
+    """Delete a position permanently (used to purge empty / rugged holdings)."""
+    positions = [p for p in load()
+                 if not (p.address == address and p.opened_at == opened_at)]
+    save(positions)
