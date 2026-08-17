@@ -177,11 +177,53 @@ def _retry(fn, tries: int = 3, delay: float = 0.6):
     raise last
 
 
+# Several public BSC nodes. Reading a balance from just one is unreliable —
+# a lagging node returns 0 for tokens you actually hold. We poll a few and take
+# the first NON-ZERO answer, which defeats the stale-0 problem.
+_BSC_READ_RPCS = [
+    "https://bsc-dataseed.binance.org",
+    "https://bsc-dataseed1.defibit.io",
+    "https://bsc-dataseed1.ninicoin.io",
+    "https://binance.llamarpc.com",
+    "https://bsc-dataseed2.defibit.io",
+]
+
+
+def _bsc_read_urls() -> list[str]:
+    import os
+    urls = []
+    if os.getenv("BSC_RPC"):
+        urls.append(os.getenv("BSC_RPC").rstrip("/"))
+    for u in _BSC_READ_RPCS:
+        if u not in urls:
+            urls.append(u)
+    return urls
+
+
 def token_balance(chain: chains.Chain, address: str) -> tuple[int, int]:
     """(raw_amount, decimals) held for an ERC-20; (0, 0) if none / no wallet."""
     owner = wallet_address()
     if not owner:
         return 0, 0
+
+    # BSC: poll several nodes and take the first non-zero (beats stale-0 reads).
+    if chain.key == "bsc":
+        from web3 import Web3
+        for url in _bsc_read_urls():
+            try:
+                w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 6}))
+                erc20 = w3.eth.contract(address=w3.to_checksum_address(address), abi=_ERC20_ABI)
+                raw = int(erc20.functions.balanceOf(w3.to_checksum_address(owner)).call())
+            except Exception:  # noqa: BLE001
+                continue
+            if raw > 0:
+                try:
+                    dec = int(erc20.functions.decimals().call())
+                except Exception:  # noqa: BLE001
+                    dec = 18
+                return raw, dec
+        return 0, 18  # every node agreed 0 (or all failed)
+
     w3 = _w3(chain)
     erc20 = w3.eth.contract(address=w3.to_checksum_address(address), abi=_ERC20_ABI)
     raw = _retry(lambda: erc20.functions.balanceOf(w3.to_checksum_address(owner)).call())
