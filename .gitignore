@@ -5,6 +5,10 @@
 *.session
 *.session-journal
 
+# Open-position ledger (your live holdings — machine-local state)
+positions.json
+positions.json.tmp
+
 # Python
 __pycache__/
 *.pyc

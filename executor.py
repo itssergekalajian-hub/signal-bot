@@ -1,102 +1,142 @@
-"""Execute a buy through Jupiter's Ultra API.
+"""Execution dispatcher — routes a trade to the right chain's adapter.
 
-Ultra is RPC-less: you GET an /order (which returns an unsigned base64
-transaction + requestId), sign it locally with your keypair, then POST it to
-/execute and Jupiter handles priority fees, slippage, and landing the tx.
+The rest of the bot never imports a chain-specific adapter directly; it calls
+executor.buy / executor.sell / executor.token_balance with the chain the market
+layer resolved, and this module dispatches:
 
-Flow:
-  GET  {base}/ultra/v1/order?inputMint=SOL&outputMint=<mint>&amount=<lamports>&taker=<pubkey>
-  ->   sign transaction locally
-  POST {base}/ultra/v1/execute  { signedTransaction, requestId }
+    solana  -> solana_executor  (Jupiter Ultra)
+    evm     -> evm_executor     (0x aggregator, any EVM chain)
+
+Position sizing is in USD (BUY_AMOUNT_USD) so one setting works on every chain:
+we price the chain's native coin via DexScreener and convert to a native amount
+before handing off. DRY_RUN is handled here, once, for all chains.
 """
 from __future__ import annotations
 
-import base64
-from dataclasses import dataclass
-
-import requests
-from solders.keypair import Keypair
-from solders.transaction import VersionedTransaction
-
+import chains
 import config
+import gas
+import market
+from swap_result import SwapResult
 
-_TIMEOUT = 20
-
-
-@dataclass
-class BuyResult:
-    ok: bool
-    detail: str
-    signature: str | None = None
+# Re-export for back-compat with older imports.
+__all__ = ["SwapResult", "buy", "sell", "token_balance", "wallet_address", "native_price"]
 
 
-def _keypair() -> Keypair:
-    return Keypair.from_base58_string(config.SOLANA_PRIVATE_KEY)
+def native_price(chain: chains.Chain) -> float | None:
+    """USD price of the chain's native coin (via its wrapped-native token)."""
+    return market.price_usd(chain.wrapped_native)
 
 
-def _headers() -> dict:
-    h = {"Content-Type": "application/json"}
-    if config.JUPITER_API_KEY:
-        h["x-api-key"] = config.JUPITER_API_KEY
-    return h
+def native_balance(chain_key: str) -> float:
+    """Wallet's native-coin balance on a chain (EVM only for now)."""
+    chain = chains.get(chain_key)
+    if not chain or chain.family != "evm":
+        return 0.0
+    import evm_executor
+    return evm_executor.native_balance(chain)
 
 
-def buy(mint: str, amount_sol: float) -> BuyResult:
-    lamports = int(amount_sol * config.LAMPORTS)
+def wallet_address(chain_key: str) -> str | None:
+    chain = chains.get(chain_key)
+    if not chain:
+        return None
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.wallet_address()
+    import evm_executor
+    return evm_executor.wallet_address()
+
+
+def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
+    chain = chains.get(chain_key)
+    if not chain:
+        return SwapResult(False, f"unsupported chain '{chain_key}'")
+
+    nat_price = native_price(chain)
+    if not nat_price:
+        return SwapResult(False, f"couldn't price {chain.native_symbol} to size the buy")
+    amount_native = amount_usd / nat_price
+
+    # Gas guard — applies in DRY_RUN too, so simulated runs show gas skips.
+    ok, gas_note = gas.check_buy(chain)
+    if not ok:
+        return SwapResult(False, f"⛽ skipped — {gas_note}")
 
     if config.DRY_RUN:
-        return BuyResult(True, f"[DRY_RUN] would buy {mint} with {amount_sol} SOL "
-                               f"({lamports} lamports). No transaction sent.")
+        return SwapResult(
+            True,
+            f"[DRY_RUN] would buy {address} on {chain.name} with "
+            f"~{amount_native:.6g} {chain.native_symbol} (${amount_usd:.2f}); {gas_note}. "
+            f"No tx sent.",
+            in_amount=int(amount_native * (10 ** 18)),
+        )
 
-    if not config.SOLANA_PRIVATE_KEY:
-        return BuyResult(False, "no SOLANA_PRIVATE_KEY configured")
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.buy(address, amount_native)
+    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
+    if chain.key == "bsc":
+        import fourmeme
+        fm = fourmeme.buy(address, amount_native)
+        if fm is not None:
+            return fm
+        import pancake
+        pk = pancake.buy(address, amount_native)
+        if pk is not None:
+            return pk
+    import evm_executor
+    return evm_executor.buy(chain, address, amount_native)
 
-    kp = _keypair()
-    taker = str(kp.pubkey())
 
-    # 1) order
-    try:
-        order = requests.get(
-            f"{config.JUPITER_BASE}/ultra/v1/order",
-            params={
-                "inputMint": config.WSOL_MINT,
-                "outputMint": mint,
-                "amount": lamports,
-                "taker": taker,
-                "slippageBps": config.SLIPPAGE_BPS,
-            },
-            headers=_headers(),
-            timeout=_TIMEOUT,
-        ).json()
-    except Exception as e:  # noqa: BLE001
-        return BuyResult(False, f"order request failed: {e}")
+def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
+    chain = chains.get(chain_key)
+    if not chain:
+        return SwapResult(False, f"unsupported chain '{chain_key}'")
+    if raw_amount <= 0:
+        return SwapResult(False, "nothing to sell (zero balance)")
 
-    tx_b64 = order.get("transaction")
-    request_id = order.get("requestId")
-    if not tx_b64 or not request_id:
-        return BuyResult(False, f"no routable order: {order.get('error') or order}")
+    if config.DRY_RUN:
+        return SwapResult(
+            True,
+            f"[DRY_RUN] would sell {raw_amount} raw units of {address} on "
+            f"{chain.name} back to {chain.native_symbol}. No tx sent.",
+            in_amount=raw_amount,
+        )
 
-    # 2) sign locally
-    try:
-        unsigned = VersionedTransaction.from_bytes(base64.b64decode(tx_b64))
-        signed = VersionedTransaction(unsigned.message, [kp])
-        signed_b64 = base64.b64encode(bytes(signed)).decode()
-    except Exception as e:  # noqa: BLE001
-        return BuyResult(False, f"signing failed: {e}")
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.sell(address, raw_amount)
 
-    # 3) execute
-    try:
-        res = requests.post(
-            f"{config.JUPITER_BASE}/ultra/v1/execute",
-            json={"signedTransaction": signed_b64, "requestId": request_id},
-            headers=_headers(),
-            timeout=_TIMEOUT,
-        ).json()
-    except Exception as e:  # noqa: BLE001
-        return BuyResult(False, f"execute request failed: {e}")
+    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
+    if chain.key == "bsc":
+        import fourmeme
+        fm = fourmeme.sell(address, raw_amount)
+        if fm is not None:
+            return fm
+        import pancake
+        pk = pancake.sell(address, raw_amount)
+        if pk is not None:
+            return pk
 
-    status = str(res.get("status", "")).lower()
-    sig = res.get("signature")
-    if status == "success" or res.get("code") == 0:
-        return BuyResult(True, f"filled — https://solscan.io/tx/{sig}", sig)
-    return BuyResult(False, f"execute returned: {res}", sig)
+    # DEX / 0x path — refuse to burn gas on a confirmed honeypot
+    if config.HONEYPOT_CHECK:
+        import honeypot
+        res = honeypot.check(chain, address)
+        if res and res.get("sim_ok") and res.get("is_honeypot"):
+            return SwapResult(False, "⛔ honeypot — simulated sell fails, not attempted (no gas spent)")
+
+    import evm_executor
+    return evm_executor.sell(chain, address, raw_amount)
+
+
+def token_balance(address: str, chain_key: str) -> tuple[int, int]:
+    """(raw_amount, decimals) held on `chain_key`; (0, 0) if none."""
+    chain = chains.get(chain_key)
+    if not chain:
+        return 0, 0
+    if chain.family == "solana":
+        import solana_executor
+        return solana_executor.token_balance(address)
+    import evm_executor
+    return evm_executor.token_balance(chain, address)
