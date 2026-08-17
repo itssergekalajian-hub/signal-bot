@@ -237,12 +237,41 @@ async def on_sell_cmd(event):
 
 
 async def _send_sell_cards() -> bool:
-    """Post a Sell 50%/100% card for each tracked position. False if none."""
+    """Post a Sell 50%/100% card for each position you ACTUALLY hold.
+
+    Reads each position's live on-chain balance and only shows cards for
+    tokens with a non-zero balance, so the menu isn't cluttered with empties
+    (already sold / rugged). Genuinely-zero positions are reconciled to
+    token_raw=0 so /positions hides them too. False if nothing is sellable.
+    """
     open_pos = positions.open_positions()
     if not open_pos:
         return False
-    await bot_client.send_message(config.TG_OWNER_ID, "Tap to sell a position:")
+
+    sellable, empty = [], 0
     for p in open_pos:
+        try:
+            raw, _ = await asyncio.to_thread(executor.token_balance, p.address, p.chain)
+        except Exception:  # noqa: BLE001 — treat a read error as "unknown", keep the card
+            raw = -1
+        if raw == 0:
+            empty += 1
+            positions.update(p.address, p.opened_at, token_raw=0, notes="empty on-chain")
+        else:
+            sellable.append(p)
+
+    if not sellable:
+        note = f" ({empty} empty — already sold or rugged, hidden)" if empty else ""
+        await bot_client.send_message(
+            config.TG_OWNER_ID,
+            f"📭 Nothing to sell{note}. Use `/sell 0x…` to sell any token by address.")
+        return True
+
+    header = "Tap to sell a position:"
+    if empty:
+        header += f"\n_({empty} empty position{'s' if empty != 1 else ''} hidden)_"
+    await bot_client.send_message(config.TG_OWNER_ID, header)
+    for p in sellable:
         cur = await asyncio.to_thread(market.price_usd, p.address)
         roi = ((cur / p.entry_price_usd) - 1) * 100 if cur and p.entry_price_usd else 0.0
         text, buttons = _sell_button(p.address, p.chain, p.symbol, f"{roi:+.0f}%")
