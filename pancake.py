@@ -37,11 +37,17 @@ _ROUTER_ABI = [
                 {"name": "to", "type": "address"},
                 {"name": "deadline", "type": "uint256"}], "outputs": []},
 ]
-_APPROVE_ABI = [
+_TOKEN_ABI = [
     {"name": "approve", "stateMutability": "nonpayable", "type": "function",
      "inputs": [{"name": "spender", "type": "address"}, {"name": "amount", "type": "uint256"}],
      "outputs": [{"type": "bool"}]},
+    {"name": "balanceOf", "stateMutability": "view", "type": "function",
+     "inputs": [{"name": "o", "type": "address"}], "outputs": [{"type": "uint256"}]},
+    {"name": "allowance", "stateMutability": "view", "type": "function",
+     "inputs": [{"name": "o", "type": "address"}, {"name": "s", "type": "address"}],
+     "outputs": [{"type": "uint256"}]},
 ]
+_MAX_UINT = (1 << 256) - 1
 
 
 def _bsc():
@@ -83,6 +89,7 @@ def sell(address: str, raw_amount: int):
     try:
         w3, chain = _bsc()
         router = w3.eth.contract(address=w3.to_checksum_address(ROUTER), abi=_ROUTER_ABI)
+        token = w3.eth.contract(address=w3.to_checksum_address(address), abi=_TOKEN_ABI)
         path = [w3.to_checksum_address(address), w3.to_checksum_address(WBNB)]
         probe = raw_amount if raw_amount > 0 else 10 ** 18
         expected = int(router.functions.getAmountsOut(probe, path).call()[-1])
@@ -96,10 +103,35 @@ def sell(address: str, raw_amount: int):
         return SwapResult(False, "nothing to sell (zero balance)")
     try:
         acct = evm_executor._account()
-        token = w3.eth.contract(address=w3.to_checksum_address(address), abi=_APPROVE_ABI)
-        approve_data = token.encode_abi("approve", args=[w3.to_checksum_address(ROUTER), raw_amount])
-        evm_executor._send(w3, acct, chain, {"to": address, "data": approve_data},
-                           gas_mult=config.SELL_GAS_MULT)
+        # Cap the sell to the balance the EXECUTING node actually sees. The
+        # position's raw_amount comes from a multi-RPC read that may be a hair
+        # higher than what this node reports (block lag / rounding), and
+        # transferFrom reverts the moment amountIn > balance. min() defeats
+        # "TransferHelper: TRANSFER_FROM_FAILED".
+        try:
+            onchain = int(evm_executor._retry(
+                lambda: token.functions.balanceOf(acct.address).call()))
+        except Exception:  # noqa: BLE001 — if the read fails, trust the caller's amount
+            onchain = raw_amount
+        if onchain <= 0:
+            return SwapResult(False, "nothing to sell (exec node sees 0 balance)")
+        raw_amount = min(raw_amount, onchain)
+        # Re-quote for the (possibly) capped amount so min_out matches what we sell.
+        expected = int(router.functions.getAmountsOut(raw_amount, path).call()[-1])
+        if expected <= 0:
+            return SwapResult(False, "no output for capped amount")
+
+        # Approve the router UNLIMITED once (idempotent) rather than an exact
+        # amount — an exact approve that's a wei short of the transferred amount
+        # is another way transferFrom reverts.
+        try:
+            current = int(token.functions.allowance(acct.address, w3.to_checksum_address(ROUTER)).call())
+        except Exception:  # noqa: BLE001
+            current = 0
+        if current < raw_amount:
+            approve_data = token.encode_abi("approve", args=[w3.to_checksum_address(ROUTER), _MAX_UINT])
+            evm_executor._send(w3, acct, chain, {"to": address, "data": approve_data},
+                               gas_mult=config.SELL_GAS_MULT)
         min_out = expected * (10_000 - config.SELL_SLIPPAGE_BPS) // 10_000
         deadline = int(time.time()) + 600
         data = router.encode_abi("swapExactTokensForETHSupportingFeeOnTransferTokens",
