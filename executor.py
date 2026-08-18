@@ -75,12 +75,18 @@ def buy(address: str, chain_key: str, amount_usd: float) -> SwapResult:
     if chain.family == "solana":
         import solana_executor
         return solana_executor.buy(address, amount_native)
-    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
+    # BSC route: four.meme curve -> KyberSwap (V2+V3+all DEXes) -> PancakeSwap
+    # V2 -> 0x. KyberSwap covers whatever venue the token lives on (this is what
+    # matches gmgn); pancake/0x are fallbacks for when its API is unreachable.
     if chain.key == "bsc":
         import fourmeme
         fm = fourmeme.buy(address, amount_native)
         if fm is not None:
             return fm
+        import aggregator
+        ag = aggregator.buy(address, amount_native)
+        if ag is not None:
+            return ag
         import pancake
         pk = pancake.buy(address, amount_native)
         if pk is not None:
@@ -108,12 +114,18 @@ def sell(address: str, chain_key: str, raw_amount: int) -> SwapResult:
         import solana_executor
         return solana_executor.sell(address, raw_amount)
 
-    # BSC route: four.meme curve -> PancakeSwap (fee-on-transfer) -> 0x aggregator.
+    # BSC route: four.meme curve -> KyberSwap (V2+V3+all DEXes) -> PancakeSwap
+    # V2 -> 0x. KyberSwap reaches V3-graduated four.meme tokens that V2/0x can't
+    # (the ones that only sold on gmgn); pancake/0x cover an API outage.
     if chain.key == "bsc":
         import fourmeme
         fm = fourmeme.sell(address, raw_amount)
         if fm is not None:
             return fm
+        import aggregator
+        ag = aggregator.sell(address, raw_amount)
+        if ag is not None:
+            return ag
         import pancake
         pk = pancake.sell(address, raw_amount)
         if pk is not None:

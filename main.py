@@ -403,10 +403,13 @@ async def on_diag(event):
     except Exception as e:  # noqa: BLE001
         raw, dec = f"err {e}", "?"
     d = await asyncio.to_thread(fourmeme.diagnose, addr)
+    import aggregator
+    ag = await asyncio.to_thread(aggregator.diagnose, addr)
     lines = [f"🔬 `{addr}`"]
     lines.append(f"market: {m.chain} · liq ${m.liquidity_usd:,.0f} · ${m.price_usd}" if m
                  else "market: none (DexScreener)")
     lines.append(f"balance raw: {raw} · decimals: {dec}")
+    lines.append(ag)
     lines.append("four.meme Helper:")
     for k, v in d.items():
         lines.append(f"  • {k}: {v}")
