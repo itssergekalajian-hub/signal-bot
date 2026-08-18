@@ -17,6 +17,14 @@ from swap_result import SwapResult
 
 ROUTER = "0x10ED43C718714eb63d5aA57B78B54704E256024E"  # PancakeSwap V2 router
 WBNB = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c"
+USDT = "0x55d398326f99059fF775485246999027B3197955"
+BUSD = "0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56"
+USDC = "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"
+# Common quote tokens to hop through. Many BSC memes pair with USDT/BUSD, not
+# BNB directly — a direct token→WBNB path reverts for those, so we also try
+# token→USDT→WBNB etc. and take whichever route gives the most output (this is
+# what a real router / gmgn does).
+_BASES = [USDT, BUSD, USDC]
 
 _ROUTER_ABI = [
     {"name": "getAmountsOut", "stateMutability": "view", "type": "function",
@@ -56,18 +64,51 @@ def _bsc():
     return evm_executor._w3(chain), chain
 
 
+def _best_route(w3, router, token: str, want: str):
+    """Find the PancakeSwap-V2 path with the best output.
+
+    want="out"  → selling token for BNB: paths token→…→WBNB.
+    want="in"   → buying token with BNB: paths WBNB→…→token.
+    The caller passes a probe amount via the closure; we return
+    (path, amounts) for the best path, or (None, None) if no pair exists on
+    any of the tried routes (so the caller can fall back to 0x).
+    """
+    tok = w3.to_checksum_address(token)
+    wbnb = w3.to_checksum_address(WBNB)
+    if want == "out":
+        candidates = [[tok, wbnb]] + [[tok, w3.to_checksum_address(b), wbnb]
+                                      for b in _BASES if b.lower() != token.lower()]
+    else:
+        candidates = [[wbnb, tok]] + [[wbnb, w3.to_checksum_address(b), tok]
+                                      for b in _BASES if b.lower() != token.lower()]
+    return candidates
+
+
+def _quote_best(router, candidates, amount_in: int):
+    """Return (best_path, out_amount) across candidate paths; (None, 0) if none."""
+    best_path, best_out = None, 0
+    for path in candidates:
+        try:
+            out = int(router.functions.getAmountsOut(amount_in, path).call()[-1])
+        except Exception:  # noqa: BLE001 — this path has no pair; try the next
+            continue
+        if out > best_out:
+            best_path, best_out = path, out
+    return best_path, best_out
+
+
 def buy(address: str, amount_native: float):
     """Buy `address` with BNB via PancakeSwap. None if there's no Pancake pair."""
     import evm_executor
     try:
         w3, chain = _bsc()
         router = w3.eth.contract(address=w3.to_checksum_address(ROUTER), abi=_ROUTER_ABI)
-        path = [w3.to_checksum_address(WBNB), w3.to_checksum_address(address)]
         value = int(amount_native * (10 ** 18))
-        expected = int(router.functions.getAmountsOut(value, path).call()[-1])
+        candidates = _best_route(w3, router, address, want="in")
+        path, expected = _quote_best(router, candidates, value)
     except Exception:  # noqa: BLE001 — no pair on Pancake; caller falls back to 0x
         return None
-    if expected <= 0:
+    if not path or expected <= 0:
         return None
     if not config.EVM_PRIVATE_KEY:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
@@ -90,12 +131,12 @@ def sell(address: str, raw_amount: int):
         w3, chain = _bsc()
         router = w3.eth.contract(address=w3.to_checksum_address(ROUTER), abi=_ROUTER_ABI)
         token = w3.eth.contract(address=w3.to_checksum_address(address), abi=_TOKEN_ABI)
-        path = [w3.to_checksum_address(address), w3.to_checksum_address(WBNB)]
+        candidates = _best_route(w3, router, address, want="out")
         probe = raw_amount if raw_amount > 0 else 10 ** 18
-        expected = int(router.functions.getAmountsOut(probe, path).call()[-1])
+        path, expected = _quote_best(router, candidates, probe)
     except Exception:  # noqa: BLE001 — no pair on Pancake; caller falls back to 0x
         return None
-    if expected <= 0:
+    if not path or expected <= 0:
         return None
     if not config.EVM_PRIVATE_KEY:
         return SwapResult(False, "no EVM_PRIVATE_KEY configured")
@@ -116,9 +157,10 @@ def sell(address: str, raw_amount: int):
         if onchain <= 0:
             return SwapResult(False, "nothing to sell (exec node sees 0 balance)")
         raw_amount = min(raw_amount, onchain)
-        # Re-quote for the (possibly) capped amount so min_out matches what we sell.
-        expected = int(router.functions.getAmountsOut(raw_amount, path).call()[-1])
-        if expected <= 0:
+        # Re-quote for the (possibly) capped amount on the best path so min_out
+        # matches what we actually sell.
+        path, expected = _quote_best(router, candidates, raw_amount)
+        if not path or expected <= 0:
             return SwapResult(False, "no output for capped amount")
 
         # Approve the router UNLIMITED once (idempotent) rather than an exact
