@@ -17,3 +17,7 @@ venv/
 
 # Bot restart-wrapper log
 bot.log
+
+# Backtest output
+channel_analysis.csv
+channel_analysis_summary.txt
