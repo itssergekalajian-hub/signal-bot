@@ -1,7 +1,8 @@
 telethon==1.36.0
 requests==2.32.*
 python-dotenv==1.0.*
-solders==0.21.*
 base58==2.1.*
-# optional: only if you enable the LLM intent filter in extractor.py
-# anthropic==0.39.*
+# Solana execution (Jupiter Ultra)
+solders==0.21.*
+# EVM execution (0x aggregator, any EVM chain) — needed only if you trade EVM chains
+web3==6.20.*

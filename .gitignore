@@ -5,8 +5,19 @@
 *.session
 *.session-journal
 
+# Open-position ledger (your live holdings — machine-local state)
+positions.json
+positions.json.tmp
+
 # Python
 __pycache__/
 *.pyc
 venv/
 .venv/
+
+# Bot restart-wrapper log
+bot.log
+
+# Backtest output
+channel_analysis.csv
+channel_analysis_summary.txt
