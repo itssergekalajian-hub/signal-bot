@@ -55,6 +55,11 @@ JUPITER_BASE    = os.getenv("JUPITER_BASE", "https://lite-api.jup.ag").rstrip("/
 JUPITER_API_KEY = os.getenv("JUPITER_API_KEY", "")
 
 # ── Execution ──────────────────────────────────────────────────────────
+# TRADING_ENABLED=false turns off the ENTIRE crypto side: no channel watching,
+# no auto-buying, no take-profit monitor, no "Signal Bot … @bschousesignal"
+# startup. Use it to run FX-only. Your wallet is untouched; /sell still works
+# to recover any holdings.
+TRADING_ENABLED = _b("TRADING_ENABLED", True)
 DRY_RUN        = _b("DRY_RUN", True)      # true = never actually swaps
 AUTO_TRADE     = _b("AUTO_TRADE", False)  # true = buy on pass; false = Buy/Skip button
 BUY_AMOUNT_USD = float(os.getenv("BUY_AMOUNT_USD", "2"))   # USD per buy, any chain
