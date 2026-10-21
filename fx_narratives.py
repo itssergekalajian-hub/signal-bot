@@ -237,7 +237,16 @@ def register(user_client, bot_client, notify):
                 owner, f"🧭 New *{instrument}* narrative posted, but I couldn't read the "
                 f"levels. Type them in: `{_short_for(instrument)} 1.2345 1.2360 OB`")
             return
-        await _propose(instrument, bias, zones)
+        if config.FX_AUTO_CONFIRM:
+            n = _add_zones(instrument, bias, zones)
+            lines = [f"🔒 *Locked in {instrument}* ({bias}) — read from the chart:"]
+            for z in zones:
+                lines.append(f"  • {_zone_text(instrument, z)}")
+            lines.append(f"\nWatching · alert within {config.FX_NEAR_PIPS:g} pips. "
+                         f"Wrong? `/fxclear {instrument}` then retype a level.")
+            await bot_client.send_message(owner, "\n".join(lines))
+        else:
+            await _propose(instrument, bias, zones)
 
     # 2) confirm / discard buttons
     @bot_client.on(events.CallbackQuery(pattern=rb"^fx(ok|no):"))
