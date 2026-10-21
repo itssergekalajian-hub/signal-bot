@@ -253,31 +253,27 @@ def register(user_client, bot_client, notify):
                 return k
         return instrument
 
-    # 1) new chart in the Narratives topic
-    @user_client.on(events.NewMessage)
-    async def _on_post(event):
-        if event.chat_id != chan_chat_id:
-            return
-        if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
-            return
-        if not event.message.photo:
-            return
-        instrument, bias = _instrument_of(event.message.message or "")
+    async def _ingest(message, announce_fail=True) -> bool:
+        """Read one narrative chart and lock in / propose its zones. True if handled."""
+        if not message.photo:
+            return False
+        instrument, bias = _instrument_of(message.message or "")
         if instrument not in _INSTRUMENTS:
-            return
+            return False
         try:
-            blob = await event.message.download_media(file=bytes)
+            blob = await message.download_media(file=bytes)
         except Exception:  # noqa: BLE001
-            return
+            return False
         zones = await asyncio.to_thread(read_levels, blob, "image/jpeg", instrument)
         if not zones:
-            await bot_client.send_message(
-                owner, f"🧭 New *{instrument}* narrative posted, but I couldn't read the "
-                f"levels. Type them in: `{_short_for(instrument)} 1.2345 1.2360 OB`")
-            return
+            if announce_fail:
+                await bot_client.send_message(
+                    owner, f"🧭 *{instrument}* narrative, but I couldn't read the levels. "
+                    f"Type them in: `{_short_for(instrument)} 1.2345 1.2360 OB`")
+            return False
         if config.FX_AUTO_CONFIRM:
-            n = _add_zones(instrument, bias, zones)
-            lines = [f"{_bias_emoji(bias)} *{instrument} — new narrative locked in*",
+            _add_zones(instrument, bias, zones)
+            lines = [f"{_bias_emoji(bias)} *{instrument} — narrative locked in*",
                      "Areas of interest now being watched:"]
             for z in zones:
                 lines.append(f"📍 {z.get('label', 'AOI')}:  `{_range_text(instrument, z)}`")
@@ -287,6 +283,43 @@ def register(user_client, bot_client, notify):
             await bot_client.send_message(owner, "\n".join(lines))
         else:
             await _propose(instrument, bias, zones)
+        return True
+
+    # 1) new chart in the Narratives topic (live)
+    @user_client.on(events.NewMessage)
+    async def _on_post(event):
+        if event.chat_id != chan_chat_id:
+            return
+        if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
+            return
+        await _ingest(event.message)
+
+    # 1b) backfill: process the last charts already posted in the topic
+    async def _backfill(n: int) -> int:
+        from telethon.tl.types import PeerChannel
+        done = 0
+        async for msg in user_client.iter_messages(
+                PeerChannel(config.FX_CHANNEL_ID),
+                reply_to=config.FX_NARRATIVES_TOPIC, limit=n * 5):
+            if await _ingest(msg, announce_fail=False):
+                done += 1
+            if done >= n:
+                break
+        return done
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxlast"))
+    async def _on_last(event):
+        parts = event.raw_text.split()
+        n = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
+        await event.reply(f"🔎 Reading the last {n} chart(s) from the Narratives topic…")
+        try:
+            done = await _backfill(n)
+        except Exception as e:  # noqa: BLE001
+            await event.reply(f"Couldn't read history: {e}")
+            return
+        await event.reply(f"✅ Locked in {done} recent chart(s). Use /zones to see them."
+                          if done else "No readable charts found in the recent posts.")
+
 
     # 2) confirm / discard buttons
     @bot_client.on(events.CallbackQuery(pattern=rb"^fx(ok|no):"))
@@ -354,7 +387,8 @@ def register(user_client, bot_client, notify):
     def _menu_markup():
         return [[Button.inline("🎯 Zones", b"fxmenu:zones"),
                  Button.inline("🧪 Health", b"fxmenu:health")],
-                [Button.inline("🧹 Clear all", b"fxmenu:clearall")]]
+                [Button.inline("📥 Read last charts", b"fxmenu:last"),
+                 Button.inline("🧹 Clear all", b"fxmenu:clearall")]]
 
     _menu_title = ("📡 *FX Signals menu*\n"
                    "Watching the Narratives topic · EURUSD / GBPUSD / DXY / XAUUSD.\n"
@@ -377,6 +411,15 @@ def register(user_client, bot_client, notify):
         elif what == "clearall":
             _save([])
             await event.respond("🧹 Cleared all zones.")
+        elif what == "last":
+            m = await event.respond("🔎 Reading the last 3 charts…")
+            try:
+                done = await _backfill(3)
+            except Exception as e:  # noqa: BLE001
+                await m.edit(f"Couldn't read history: {e}")
+                return
+            await m.edit(f"✅ Locked in {done} recent chart(s). /zones to see them."
+                         if done else "No readable charts in the recent posts.")
 
 
 # ── watch loop ────────────────────────────────────────────────────────

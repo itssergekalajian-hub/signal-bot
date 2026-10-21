@@ -33,6 +33,7 @@ async def _register_commands() -> None:
         from telethon.tl import functions, types
         cmds = [("menu", "FX menu"),
                 ("zones", "Watched price zones"),
+                ("fxlast", "Lock in recent charts"),
                 ("fxclear", "Clear zones (id / pair / all)"),
                 ("fxtest", "Health check: prices + Gemini")]
         await bot_client(functions.bots.SetBotCommandsRequest(
