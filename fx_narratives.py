@@ -384,15 +384,21 @@ async def run(bot_client, notify):
     """Poll live prices; alert when price nears a watched zone."""
     from telethon.tl.types import PeerChannel
 
+    warned = False  # only nag once if channel posting isn't set up
+
     async def _alert(text):
+        nonlocal warned
         if config.FX_ALERT_TARGET == "channel":
             try:
                 await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
                                               reply_to=config.FX_ALERT_TOPIC)
                 return
             except Exception:  # noqa: BLE001 — bot not in channel -> fall back to DM
-                await notify("⚠️ (couldn't post in the channel — is the bot added there "
-                             "as admin? Falling back to DM.)")
+                if not warned:
+                    await notify("⚠️ Can't post in the channel yet — add the bot there as "
+                                 "admin (with Post Messages). Sending alerts to you by DM "
+                                 "for now.")
+                    warned = True
         await notify(text)
 
     while True:
