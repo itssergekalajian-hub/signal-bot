@@ -93,14 +93,17 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{config.GEMINI_MODEL}:generateContent?key={config.GEMINI_API_KEY}")
     prompt = (
-        f"This is a TradingView chart screenshot of {instrument}. A trader has drawn "
-        "horizontal levels and rectangular zones (FVG = fair value gap, OB = order "
-        "block, and support/resistance lines, often labelled like OB, FVG, W, WL). "
-        "Read each DRAWN level's price value from the right-hand price axis. "
+        f"This is a TradingView chart of {instrument}. A trader has drawn a FEW specific "
+        "areas of interest: Fair Value Gaps (FVG, shaded rectangles), Order Blocks (OB, "
+        "shaded rectangles), and a few key horizontal lines they labelled — e.g. W "
+        "(weekly), WL (weekly low), WH (weekly high), BSL/SSL (liquidity), or prior "
+        "highs/lows. Report ONLY the zones the trader actually drew or labelled. "
+        "Do NOT invent generic support/resistance. Do NOT report the price-axis grid "
+        "lines or candles. There are usually 2–6 such zones. Use the trader's own label "
+        "('FVG','OB','W','WL',...). For a shaded box give its lower and upper edge; for a "
+        "single line set low=high. Read values from the right-hand price axis. "
         "Return ONLY JSON: {\"zones\":[{\"label\":\"OB\",\"low\":1.1240,\"high\":1.1250}]}. "
-        "For a single horizontal line use the same number for low and high. Report "
-        "prices on the axis's own scale. Include only the trader's drawn levels, not "
-        "every candle. If you cannot read any, return {\"zones\":[]}."
+        "If you cannot read any, return {\"zones\":[]}."
     )
     body = {
         "contents": [{"parts": [
@@ -109,12 +112,17 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
         ]}],
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
-    try:
-        r = requests.post(url, json=body, timeout=45)
-        txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        zones = json.loads(txt).get("zones", [])
-    except Exception:  # noqa: BLE001 — bad key / quota / parse -> propose nothing
-        return []
+    zones = []
+    for attempt in range(3):  # free tier can transiently rate-limit / return empty
+        try:
+            r = requests.post(url, json=body, timeout=45)
+            txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            zones = json.loads(txt).get("zones", [])
+            if zones or r.status_code == 200:
+                break
+        except Exception:  # noqa: BLE001 — bad key / quota / parse -> retry then give up
+            pass
+        time.sleep(2)
     out = []
     for z in zones:
         try:
@@ -194,6 +202,28 @@ def _pips_away(instrument: str, p: float, z: dict) -> float:
     if z["low"] <= p <= z["high"]:
         return 0.0
     return min(abs(p - z["low"]), abs(p - z["high"])) / _PIP.get(instrument, 0.0001)
+
+
+def _limit_zones(instrument: str, p, zones: list[dict]) -> list[dict]:
+    """Keep only the FX_MAX_ZONES zones nearest current price (dedup first)."""
+    seen, uniq = set(), []
+    for z in zones:
+        try:
+            lo, hi = sorted((float(z["low"]), float(z["high"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+        key = (round(lo, 5), round(hi, 5))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(z)
+    if not p or len(uniq) <= config.FX_MAX_ZONES:
+        return uniq
+
+    def _d(z):
+        lo, hi = sorted((float(z["low"]), float(z["high"])))
+        return 0.0 if lo <= p <= hi else min(abs(p - lo), abs(p - hi))
+    return sorted(uniq, key=_d)[:config.FX_MAX_ZONES]
 
 
 def _bias_emoji(bias: str) -> str:
@@ -302,6 +332,8 @@ def register(user_client, bot_client, notify):
                     owner, f"🧭 *{instrument}* narrative, but I couldn't read the levels. "
                     f"Type them in: `{_short_for(instrument)} 1.2345 1.2360 OB`")
             return False
+        p = await asyncio.to_thread(price, instrument)
+        zones = _limit_zones(instrument, p, zones)
         if config.FX_AUTO_CONFIRM:
             _add_zones(instrument, bias, zones)
             lines = [f"{_bias_emoji(bias)} *{instrument} — narrative locked in*",
@@ -371,9 +403,11 @@ def register(user_client, bot_client, notify):
             except Exception:  # noqa: BLE001
                 zones = []
             p = await asyncio.to_thread(price, inst)
+            zones = _limit_zones(inst, p, zones)
             out.append(f"\n{_bias_emoji(bias)} *{inst}* — now `{_fmt(inst, p) if p else '?'}`")
             if not zones:
                 out.append("  _latest chart unreadable_")
+                await asyncio.sleep(1.5)       # ease the free-tier rate limit
                 continue
             pend = []
             for z in zones:
@@ -388,6 +422,7 @@ def register(user_client, bot_client, notify):
             if pend:
                 any_pending = True
                 _add_zones(inst, bias, pend)
+            await asyncio.sleep(1.5)            # ease the free-tier rate limit
         out.append(f"\n🔔 Locked in as targets — alerts within {config.FX_NEAR_PIPS:g} pips."
                    if any_pending else "\n_Nothing pending — price is already at every level._")
         return "\n".join(out)

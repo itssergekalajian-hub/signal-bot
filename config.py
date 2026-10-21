@@ -38,3 +38,6 @@ FX_ZONES_FILE       = os.getenv("FX_ZONES_FILE", "fx_zones.json")
 # with no confirm tap (the bot just tells you what it locked). false = you tap
 # ✅ Confirm on each proposal first.
 FX_AUTO_CONFIRM = _b("FX_AUTO_CONFIRM", True)
+# Cap how many zones to watch per instrument (keeps the nearest-to-price ones,
+# avoids alert spam when a chart has many lines).
+FX_MAX_ZONES = int(os.getenv("FX_MAX_ZONES", "6"))
