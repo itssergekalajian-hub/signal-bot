@@ -125,6 +125,37 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
     return out
 
 
+def gemini_probe(image_bytes: bytes, mime: str, instrument: str) -> str:
+    """Diagnostic: run Gemini and return a human-readable outcome (not swallowed)."""
+    if not config.GEMINI_API_KEY:
+        return "GEMINI_API_KEY not set"
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{config.GEMINI_MODEL}:generateContent?key={config.GEMINI_API_KEY}")
+    body = {
+        "contents": [{"parts": [
+            {"text": f"Read the drawn price levels on this {instrument} chart. "
+                     "Return JSON {\"zones\":[{\"label\":\"OB\",\"low\":1.1,\"high\":1.1}]}."},
+            {"inline_data": {"mime_type": mime, "data": base64.b64encode(image_bytes).decode()}},
+        ]}],
+        "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
+    }
+    try:
+        r = requests.post(url, json=body, timeout=45)
+    except Exception as e:  # noqa: BLE001
+        return f"request failed: {e}"
+    try:
+        j = r.json()
+    except Exception:  # noqa: BLE001
+        return f"HTTP {r.status_code}, non-JSON body: {r.text[:300]}"
+    if r.status_code != 200:
+        return f"HTTP {r.status_code}: {(j.get('error') or {}).get('message', r.text[:300])}"
+    try:
+        return "OK → " + j["candidates"][0]["content"]["parts"][0]["text"][:350]
+    except Exception:  # noqa: BLE001
+        fin = ((j.get("candidates") or [{}])[0]).get("finishReason")
+        return f"200 but no text (finishReason={fin}). Raw: {str(j)[:300]}"
+
+
 # ── live price (Yahoo Finance, free, no key) ──────────────────────────
 def price(instrument: str):
     for sym in _YSYM.get(instrument, []):
@@ -370,6 +401,25 @@ def register(user_client, bot_client, notify):
             await m.edit(f"Scan failed: {e}")
             return
         await m.edit(txt)
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxdiag"))
+    async def _on_diag(event):
+        from telethon.tl.types import PeerChannel
+        await event.reply("🔧 Testing Gemini on the latest chart…")
+        async for msg in user_client.iter_messages(
+                PeerChannel(config.FX_CHANNEL_ID),
+                reply_to=config.FX_NARRATIVES_TOPIC, limit=40):
+            if not msg.photo:
+                continue
+            inst, _ = _instrument_of(msg.message or "")
+            if inst not in _INSTRUMENTS:
+                continue
+            blob = await msg.download_media(file=bytes)
+            res = await asyncio.to_thread(gemini_probe, blob, "image/jpeg", inst)
+            await event.reply(f"Chart: {inst} · image {len(blob or b'')} bytes\n"
+                              f"Model: {config.GEMINI_MODEL}\n\n{res}")
+            return
+        await event.reply("No chart found to test.")
 
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxlast"))
     async def _on_last(event):
