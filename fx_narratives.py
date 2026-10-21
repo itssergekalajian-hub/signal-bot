@@ -252,27 +252,48 @@ def _reached_msg(z: dict, p: float) -> str:
     return "\n".join(lines)
 
 
-def _zones_message() -> str:
+async def _zones_message() -> str:
     zs = _load()
     if not zs:
-        return ("📭 No zones being watched. They're added when you confirm a narrative, "
-                "or type one like `GU 1.2850 1.2870 OB`.")
-    lines = ["🎯 *Watched zones*"]
+        return ("🎯 *Watchlist — empty*\n\nZones lock in automatically when a narrative "
+                "posts. Scan the channel now with /fxsync, or add one yourself:\n"
+                "`GU 1.2850 1.2870 OB`")
+    by_ins = {}
     for z in zs:
-        lines.append(f"  • `{z['id']}` {z['instrument']} {_zone_text(z['instrument'], z)}")
-    lines.append("\nClear one: `/fxclear <id>` · a pair: `/fxclear EURUSD` · all: `/fxclear all`")
+        by_ins.setdefault(z["instrument"], []).append(z)
+    prices = {ins: await asyncio.to_thread(price, ins) for ins in by_ins}
+    lines = [f"🎯 *Watchlist* — {len(zs)} zone(s)"]
+    for ins in _INSTRUMENTS:
+        if ins not in by_ins:
+            continue
+        p = prices.get(ins)
+        bias = next((z.get("bias") for z in by_ins[ins] if z.get("bias") not in (None, "?")), "?")
+        head = f"\n{_bias_emoji(bias)} *{ins}*"
+        if p:
+            head += f"  ·  now `{_fmt(ins, p)}`"
+        lines.append(head)
+        for z in sorted(by_ins[ins], key=lambda z: _pips_away(ins, p, z) if p else 0):
+            away = f"  ·  {_pips_away(ins, p, z):.0f} pips" if p else ""
+            lines.append(f"   • {z['label']}  `{_range_text(ins, z)}`{away}   `{z['id']}`")
+    lines.append("\n_Remove:_ `/fxclear <id>` · `/fxclear EURUSD` · `/fxclear all`")
     return "\n".join(lines)
 
 
 async def _health_message() -> str:
-    lines = ["*Live prices (Yahoo):*"]
+    lines = ["🩺 *System status*", "\n*Live prices* (Yahoo Finance)"]
     for ins in _INSTRUMENTS:
         p = await asyncio.to_thread(price, ins)
-        lines.append(f"  • {ins}: {_fmt(ins, p) if p else '❌ unavailable'}")
-    gem = "set ✅" if config.GEMINI_API_KEY else "❌ not set"
-    lines.append(f"\nGemini key: {gem} · model {config.GEMINI_MODEL}")
+        lines.append(f"   {'✅' if p else '❌'} {ins}:  `{_fmt(ins, p)}`" if p
+                     else f"   ❌ {ins}:  unavailable")
+    gkey = "✅" if config.GEMINI_API_KEY else "❌ no key"
+    mode = "fully automatic" if config.FX_AUTO_CONFIRM else "confirm-first"
     dest = "the channel" if config.FX_ALERT_TARGET == "channel" else "you (DM)"
-    lines.append(f"Alerts → {dest} · within {config.FX_NEAR_PIPS:g} pips")
+    lines += ["\n*Chart reading*",
+              f"   Gemini `{config.GEMINI_MODEL}` {gkey}",
+              "\n*Alerts*",
+              f"   → {dest}  ·  within {config.FX_NEAR_PIPS:g} pips",
+              f"   mode: {mode}  ·  checks every {config.FX_POLL_SEC}s",
+              f"   watching: {len(_load())} zone(s)"]
     return "\n".join(lines)
 
 
@@ -508,7 +529,7 @@ def register(user_client, bot_client, notify):
     # 4) commands
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/zones"))
     async def _on_zones(event):
-        await event.reply(_zones_message())
+        await event.reply(await _zones_message())
 
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxclear"))
     async def _on_clear(event):
@@ -535,16 +556,34 @@ def register(user_client, bot_client, notify):
     # ── FX menu ────────────────────────────────────────────────────────
     def _menu_markup():
         return [[Button.inline("🔁 Scan channel", b"fxmenu:sync"),
-                 Button.inline("🎯 Zones", b"fxmenu:zones")],
-                [Button.inline("🧪 Health", b"fxmenu:health"),
-                 Button.inline("🧹 Clear all", b"fxmenu:clearall")]]
+                 Button.inline("🎯 Watchlist", b"fxmenu:zones")],
+                [Button.inline("🩺 Status", b"fxmenu:health"),
+                 Button.inline("🧹 Clear all", b"fxmenu:clearall")],
+                [Button.inline("ℹ️ How it works", b"fxmenu:help")]]
 
-    _menu_title = ("📡 *FX Signals menu*\n"
-                   "Watching the Narratives topic · EURUSD / GBPUSD / DXY / XAUUSD.\n"
-                   "Confirm levels when a narrative posts, or type one like "
-                   "`GU 1.2850 1.2870 OB`.")
+    _menu_title = (
+        "📡 *FX Signals*\n\n"
+        "I watch the *Narratives* topic, read each chart automatically, and alert you "
+        "when price nears an area of interest — then again when it reaches it "
+        "(auto-cleared).\n\n"
+        "_Markets:_ EURUSD · GBPUSD · DXY · XAUUSD")
 
-    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/(menu|start)"))
+    _help_text = (
+        "ℹ️ *How it works*\n\n"
+        "1️⃣  An analyst posts a chart → I read the zones with AI and lock them in.\n"
+        "2️⃣  ⚠️ I alert when price comes within "
+        f"{config.FX_NEAR_PIPS:g} pips.\n"
+        "3️⃣  🎯 I alert again when price *reaches* it, then clear it automatically.\n\n"
+        "*Everything is automatic — you don't have to do anything.*\n\n"
+        "*Commands*\n"
+        "• /fxsync — scan the whole channel for current targets\n"
+        "• /zones — your live watchlist\n"
+        "• /fxtest — system status\n"
+        "• /fxclear `id | PAIR | all` — remove zones\n"
+        "• /fxlast `N` — re-read the last N charts\n"
+        "• Add your own:  `GU 1.2850 1.2870 OB`")
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/(menu|start|help)"))
     async def _on_menu(event):
         await event.reply(_menu_title, buttons=_menu_markup())
 
@@ -553,9 +592,11 @@ def register(user_client, bot_client, notify):
         what = event.data.decode().split(":", 1)[1]
         await event.answer()
         if what == "zones":
-            await event.respond(_zones_message())
+            await event.respond(await _zones_message())
+        elif what == "help":
+            await event.respond(_help_text)
         elif what == "health":
-            m = await event.respond("🔧 Checking…")
+            m = await event.respond("🩺 Checking…")
             await m.edit(await _health_message())
         elif what == "clearall":
             _save([])

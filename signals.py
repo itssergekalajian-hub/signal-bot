@@ -31,12 +31,13 @@ async def _register_commands() -> None:
     """Show only the FX commands in Telegram's '/' menu."""
     try:
         from telethon.tl import functions, types
-        cmds = [("menu", "FX menu"),
-                ("fxsync", "Scan whole channel for pending targets"),
-                ("zones", "Watched price zones"),
-                ("fxlast", "Lock in recent charts"),
-                ("fxclear", "Clear zones (id / pair / all)"),
-                ("fxtest", "Health check: prices + Gemini")]
+        cmds = [("menu", "Open the FX menu"),
+                ("fxsync", "Scan the channel for current targets"),
+                ("zones", "Your live watchlist"),
+                ("fxlast", "Re-read the last N charts"),
+                ("fxclear", "Remove zones (id / pair / all)"),
+                ("fxtest", "System status"),
+                ("help", "How it works")]
         await bot_client(functions.bots.SetBotCommandsRequest(
             scope=types.BotCommandScopeDefault(), lang_code="",
             commands=[types.BotCommand(c, d) for c, d in cmds]))
@@ -52,14 +53,15 @@ async def main():
     fx_narratives.register(user_client, bot_client, _notify)
 
     gem = "Gemini auto-read ON" if config.GEMINI_API_KEY else "Gemini key missing — manual entry only"
+    dest = "the channel" if config.FX_ALERT_TARGET == "channel" else "you (DM)"
     print(f"FX signals bot running. Narratives topic {config.FX_NARRATIVES_TOPIC} "
           f"of channel {config.FX_CHANNEL_ID}. {gem}.")
     await _notify(
-        "📡 *FX signals bot online.*\n"
-        "Watching the Narratives topic · EURUSD / GBPUSD / DXY / XAUUSD\n"
-        f"Alerts when price comes within {config.FX_NEAR_PIPS:g} pips of a zone.\n"
-        f"_{gem}._\n"
-        "Commands: /zones · /fxclear · /fxtest")
+        "📡 *FX Signals — online*\n\n"
+        "Watching the *Narratives* topic and reading every chart automatically.\n"
+        "_Markets:_  EURUSD · GBPUSD · DXY · XAUUSD\n"
+        f"_Alerts:_  → {dest}, within {config.FX_NEAR_PIPS:g} pips\n\n"
+        "Tap /menu to get started  ·  /fxsync to scan now.")
 
     await asyncio.gather(
         user_client.run_until_disconnected(),
