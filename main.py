@@ -531,6 +531,13 @@ async def main():
     await user_client.start()  # first run prompts for phone + code
     await _register_commands()
 
+    # FX narratives watcher (separate feature; shares these clients/loop).
+    if config.FX_ENABLED:
+        import fx_narratives
+        fx_narratives.register(user_client, bot_client, _notify)
+        print(f"FX watcher ON — narratives topic {config.FX_NARRATIVES_TOPIC} "
+              f"of channel {config.FX_CHANNEL_ID}.")
+
     dry = "DRY_RUN (no real trades)" if config.DRY_RUN else "LIVE — real funds"
     auto = "AUTO buy" if config.AUTO_TRADE else "manual confirm"
     mode = f"{dry} · {auto}"
@@ -554,6 +561,9 @@ async def main():
     ]
     if config.TAKE_PROFIT_ENABLED or config.STOP_LOSS_PCT > 0:
         tasks.append(monitor.run(_notify))  # background take-profit / stop-loss loop
+    if config.FX_ENABLED:
+        import fx_narratives
+        tasks.append(fx_narratives.run(bot_client, _notify))  # FX price-watch loop
     await asyncio.gather(*tasks)
 
 

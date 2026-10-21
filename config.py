@@ -111,3 +111,19 @@ STRICT_SAFETY     = _b("STRICT_SAFETY", False)
 HONEYPOT_CHECK       = _b("HONEYPOT_CHECK", True)
 MAX_HONEYPOT_TAX_PCT = float(os.getenv("MAX_HONEYPOT_TAX_PCT", "15"))  # reject if sell tax over this
 MIN_HOLDERS          = int(os.getenv("MIN_HOLDERS", "0"))              # 0 = off
+
+# ── FX narratives watcher (separate feature from crypto trading) ────────
+# Watches a Smart-Money-Concepts signal channel's "Narratives" topic, reads the
+# chart with Gemini vision, you confirm the levels, then it alerts when live
+# price (Yahoo Finance, free) nears a zone. All free: Gemini free tier + Yahoo.
+FX_ENABLED          = _b("FX_ENABLED", False)   # off until GEMINI_API_KEY is set
+GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL        = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+FX_CHANNEL_ID       = int(os.getenv("FX_CHANNEL_ID", "4427092169"))
+FX_NARRATIVES_TOPIC = int(os.getenv("FX_NARRATIVES_TOPIC", "2"))
+# Where "price nearing" alerts go: "owner" = DM you via the bot (always works);
+# or "channel" = post into the signal channel (needs the bot added as admin).
+FX_ALERT_TARGET     = os.getenv("FX_ALERT_TARGET", "owner")
+FX_NEAR_PIPS        = float(os.getenv("FX_NEAR_PIPS", "15"))
+FX_POLL_SEC         = int(os.getenv("FX_POLL_SEC", "60"))
+FX_ZONES_FILE       = os.getenv("FX_ZONES_FILE", "fx_zones.json")

@@ -24,3 +24,7 @@ channel_analysis_summary.txt
 
 # Channel scan output
 scan_output/
+
+# FX zones store
+fx_zones.json
+fx_zones.json.tmp
