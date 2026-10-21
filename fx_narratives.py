@@ -66,7 +66,7 @@ def _add_zones(instrument: str, bias: str, zones: list[dict]) -> int:
         lo, hi = sorted((float(z["low"]), float(z["high"])))
         cur.append({"id": secrets.token_hex(3), "instrument": instrument, "bias": bias,
                     "label": str(z.get("label") or "AOI"), "low": lo, "high": hi,
-                    "armed": True, "created": time.time()})
+                    "near_notified": False, "created": time.time()})
         n += 1
     _save(cur)
     return n
@@ -151,6 +151,44 @@ def _zone_text(instrument: str, z: dict) -> str:
     if abs(z["low"] - z["high"]) < 1e-9:
         return f"{z['label']} {_fmt(instrument, z['low'])}"
     return f"{z['label']} {_fmt(instrument, z['low'])}–{_fmt(instrument, z['high'])}"
+
+
+def _range_text(instrument: str, z: dict) -> str:
+    if abs(z["low"] - z["high"]) < 1e-9:
+        return _fmt(instrument, z["low"])
+    return f"{_fmt(instrument, z['low'])} – {_fmt(instrument, z['high'])}"
+
+
+def _pips_away(instrument: str, p: float, z: dict) -> float:
+    if z["low"] <= p <= z["high"]:
+        return 0.0
+    return min(abs(p - z["low"]), abs(p - z["high"])) / _PIP.get(instrument, 0.0001)
+
+
+def _bias_emoji(bias: str) -> str:
+    return {"bullish": "📈", "bearish": "📉"}.get(bias, "🧭")
+
+
+def _near_msg(z: dict, p: float) -> str:
+    ins = z["instrument"]
+    away = _pips_away(ins, p, z)
+    lines = [f"⚠️ *{ins} — approaching area of interest*",
+             f"📍 {z['label']}:  `{_range_text(ins, z)}`",
+             f"💵 Price:  `{_fmt(ins, p)}`  ({away:.0f} pips away)"]
+    if z.get("bias") and z["bias"] != "?":
+        lines.append(f"{_bias_emoji(z['bias'])} Bias:  {z['bias']}")
+    return "\n".join(lines)
+
+
+def _reached_msg(z: dict, p: float) -> str:
+    ins = z["instrument"]
+    lines = [f"🎯 *{ins} — reached area of interest*",
+             f"📍 {z['label']}:  `{_range_text(ins, z)}`",
+             f"💵 Tapped at:  `{_fmt(ins, p)}`"]
+    if z.get("bias") and z["bias"] != "?":
+        lines.append(f"{_bias_emoji(z['bias'])} Bias:  {z['bias']}")
+    lines.append("✅ _Target hit — zone cleared automatically._")
+    return "\n".join(lines)
 
 
 def _zones_message() -> str:
@@ -239,11 +277,13 @@ def register(user_client, bot_client, notify):
             return
         if config.FX_AUTO_CONFIRM:
             n = _add_zones(instrument, bias, zones)
-            lines = [f"🔒 *Locked in {instrument}* ({bias}) — read from the chart:"]
+            lines = [f"{_bias_emoji(bias)} *{instrument} — new narrative locked in*",
+                     "Areas of interest now being watched:"]
             for z in zones:
-                lines.append(f"  • {_zone_text(instrument, z)}")
-            lines.append(f"\nWatching · alert within {config.FX_NEAR_PIPS:g} pips. "
-                         f"Wrong? `/fxclear {instrument}` then retype a level.")
+                lines.append(f"📍 {z.get('label', 'AOI')}:  `{_range_text(instrument, z)}`")
+            lines.append(f"\n🔔 I'll alert within {config.FX_NEAR_PIPS:g} pips, and again when "
+                         f"price reaches it (then it clears itself).")
+            lines.append(f"_Wrong read? `/fxclear {instrument}` to drop these._")
             await bot_client.send_message(owner, "\n".join(lines))
         else:
             await _propose(instrument, bias, zones)
@@ -362,27 +402,31 @@ async def run(bot_client, notify):
                 prices = {}
                 for ins in {z["instrument"] for z in zones}:
                     prices[ins] = await asyncio.to_thread(price, ins)
-                changed = False
+                kept, changed = [], False
                 for z in zones:
                     p = prices.get(z["instrument"])
                     if not p:
+                        kept.append(z)
                         continue
                     pip = _PIP.get(z["instrument"], 0.0001)
                     near = config.FX_NEAR_PIPS * pip
-                    inside = z["low"] <= p <= z["high"]
-                    dist = 0.0 if inside else min(abs(p - z["low"]), abs(p - z["high"]))
-                    if dist <= near and z.get("armed", True):
-                        where = "inside" if inside else "approaching"
-                        await _alert(
-                            f"⚠️ *{z['instrument']}* {where} "
-                            f"{_zone_text(z['instrument'], z)} — now {_fmt(z['instrument'], p)}")
-                        z["armed"] = False
+                    # REACHED: price entered the zone -> alert + auto-clear (drop it)
+                    if z["low"] <= p <= z["high"]:
+                        await _alert(_reached_msg(z, p))
                         changed = True
-                    elif dist > near * 2 and not z.get("armed", True):
-                        z["armed"] = True            # moved away -> re-arm
+                        continue  # not appended to kept = removed
+                    dist = min(abs(p - z["low"]), abs(p - z["high"]))
+                    # NEARING: within N pips, announced once
+                    if dist <= near and not z.get("near_notified"):
+                        await _alert(_near_msg(z, p))
+                        z["near_notified"] = True
                         changed = True
+                    elif dist > near * 2 and z.get("near_notified"):
+                        z["near_notified"] = False       # moved away -> allow a fresh heads-up
+                        changed = True
+                    kept.append(z)
                 if changed:
-                    _save(zones)
+                    _save(kept)
         except Exception as e:  # noqa: BLE001 — never let the loop die
             try:
                 await notify(f"fx watch error: {e}")
