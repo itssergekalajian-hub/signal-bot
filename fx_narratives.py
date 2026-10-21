@@ -328,7 +328,7 @@ async def run(bot_client, notify):
                     if dist <= near and z.get("armed", True):
                         where = "inside" if inside else "approaching"
                         await _alert(
-                            f"⚠️ *{z['instrument']}* {where} {z['label']} "
+                            f"⚠️ *{z['instrument']}* {where} "
                             f"{_zone_text(z['instrument'], z)} — now {_fmt(z['instrument'], p)}")
                         z["armed"] = False
                         changed = True
