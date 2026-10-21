@@ -1,165 +1,46 @@
-# Multichain signal bot — detect · resolve chain · safety-check · open · take-profit
+# FX Signals Bot
 
-Watches a Telegram channel, pulls out **any** token address it posts (EVM *or*
-Solana), automatically figures out **which chain** each one lives on, runs it
-through a safety gate, then either **auto-buys** it or DMs you a **Buy / Skip**
-button. Every position it opens is tracked, and **50% is sold automatically once
-the token reaches 2x (100% ROI)**.
+A Telegram bot that turns a Smart-Money-Concepts analyst's chart posts into
+live price alerts — for free.
 
+## What it does
+1. Watches the **Narratives** topic of a signal channel.
+2. When a chart is posted, reads the instrument + bias from the caption
+   (📈/📉 EU/GU/DXY/XAU) and sends the image to **Google Gemini** (free tier) to
+   read the drawn zones (FVG / OB / highs / lows) off the price axis.
+3. DMs you the proposed levels to **Confirm / Discard** (or type your own, e.g.
+   `GU 1.2850 1.2870 OB`).
+4. Watches live price from **Yahoo Finance** (free, no key) for
+   EURUSD / GBPUSD / DXY / XAUUSD and alerts when price comes within
+   `FX_NEAR_PIPS` of a zone — in the channel or by DM.
+
+It does **not** place trades. Alerting only.
+
+## Run
 ```
-channel message → extract addresses → resolve chain (DexScreener) → safety gate ─┬─ AUTO_TRADE=true  → buy now
-                                                                                 └─ AUTO_TRADE=false → DM Buy/Skip → buy
-                                                                                                                     │
-                                              open position (any chain) ──────────────────────────────────────────┘
-                                                     │
-                              monitor re-prices every 30s → hits 2x? → sell 50% → keep the moonbag
+pip install -r requirements.txt
+python3 signals.py
 ```
 
-## Chains
+## .env
+```
+TG_API_ID=...
+TG_API_HASH=...
+TG_BOT_TOKEN=...
+TG_OWNER_ID=...
+GEMINI_API_KEY=AIza...            # free key from aistudio.google.com/apikey
+FX_CHANNEL_ID=4427092169          # the signal channel (from t.me/c/<id>/..)
+FX_NARRATIVES_TOPIC=2             # the Narratives topic id
+FX_ALERT_TARGET=owner             # "channel" to post in the channel, "owner" to DM
+FX_NEAR_PIPS=15
+```
 
-The bot never trusts a link slug (a `gmgn.ai/robinhood/…` or `/bsc/…` prefix)
-to decide the chain — it resolves the chain from the **address itself** via
-DexScreener, then routes to the right DEX:
+## Commands (in the Telegram chat with the bot)
+- `/menu` — buttons: Zones · Health · Clear all
+- `/zones` — list watched zones
+- `/fxclear <id|PAIR|all>` — remove zones
+- `/fxtest` — health check (live prices + Gemini key)
+- Type a level anytime: `GU 1.2850 1.2870 OB`
 
-| Family | Chains | Swaps via | Wallet |
-|---|---|---|---|
-| EVM | BNB Chain, Ethereum, Arbitrum, Base, Polygon, Optimism, Avalanche | 0x aggregator | one `EVM_PRIVATE_KEY` for all of them |
-| Solana | Solana | Jupiter Ultra | `SOLANA_PRIVATE_KEY` |
-
-Adding another EVM chain is one row in `chains.py`. A token on a chain the bot
-doesn't support is safely skipped, not traded blindly.
-
-**four.meme launchpad (BSC):** many BSC signal calls are four.meme tokens still
-on their bonding curve — 0x/PancakeSwap can't trade those until they graduate.
-The bot detects this (via four.meme's Helper `getTokenInfo.liquidityAdded`) and
-routes buys/sells through four.meme's `TokenManager` (`buyTokenAMAP` /
-`sellToken`), falling back to 0x once a token graduates. Toggle with
-`FOURMEME_ENABLED`; slippage via `FOURMEME_SLIPPAGE_BPS` (curves move fast).
-
-## Read this first (money at risk)
-
-- **Most memecoin calls go to zero.** The safety gate blocks honeypots, high-tax
-  tokens, and dead liquidity — it's a scam filter, **not** an edge.
-- **`AUTO_TRADE=true` spends real funds with no human in the loop.** It buys
-  every call that passes the gate, good or bad. Start with it `false`.
-- **Use dedicated throwaway wallets** funded with only what you can lose. Never
-  put a main wallet's key in `.env` — it sits in plaintext on this machine.
-- **Keep `DRY_RUN=true`** until you've watched it resolve, score, buy, and
-  take-profit against real messages and you trust every step.
-- The take-profit only ever *sells* — there's no stop-loss. The 50% moonbag can
-  still go to zero.
-- Following "aped X" posts means buying *after* the caller did — you can be their
-  exit liquidity. Size accordingly.
-- Not financial advice. You own every trade it makes for you.
-
-## Setup
-
-1. `pip install -r requirements.txt`
-   (Trading Solana only? You can skip `web3`. Trading EVM only? You can skip
-   `solders`.)
-2. `cp .env.example .env` and fill it in:
-   - **`TG_API_ID` / `TG_API_HASH`** — https://my.telegram.org (a user account,
-     not a bot, is required to read a channel).
-   - **`TG_BOT_TOKEN`** — from @BotFather; **DM your new bot once**.
-   - **`TG_OWNER_ID`** — your numeric id from @userinfobot.
-   - **`EVM_PRIVATE_KEY`** and/or **`SOLANA_PRIVATE_KEY`** — throwaway wallets.
-   - **`ZEROX_API_KEY`** — free from https://dashboard.0x.org (for EVM swaps).
-   - **`TG_CHANNEL`** — the channel to watch.
-3. `python main.py` — first run asks for your phone + login code.
-
-## Going from "watch" to "fully automatic" (do this in order)
-
-Two independent switches. Turn them on one at a time so you always understand
-what the bot is doing before real money moves.
-
-| Stage | `DRY_RUN` | `AUTO_TRADE` | What happens |
-|---|---|---|---|
-| 1. Watch | `true` | `false` | DMs you Buy/Skip; buy + 2x take-profit are simulated |
-| 2. Auto-sim | `true` | `true` | Opens every passing call on its own, still simulated |
-| 3. Live | `false` | `false`→`true` | Real funds. One manual buy first, then flip to hands-off |
-
-At Stage 3, fund each chain's wallet with a **small** amount and native gas
-(BNB on BSC, ETH on Arbitrum/Base, SOL on Solana) before going hands-off.
-
-## How the take-profit works
-
-- On open, the bot records the **entry price** (DexScreener) into
-  `positions.json`.
-- A background loop re-prices every open position every `POLL_INTERVAL_SEC`.
-  When `current / entry ≥ TAKE_PROFIT_MULT` (default `2.0`) it sells
-  `TAKE_PROFIT_SELL_PCT` (default 50%) back to the chain's native coin —
-  **exactly once** per position — and leaves the rest running.
-- Live mode reads your **actual on-chain balance** at sell time, so it always
-  sells 50% of what you really hold.
-- "As per the signal channel" is a fixed, configurable rule (2x → 50%), **not**
-  driven by the channel posting a "take profit" message — these channels call
-  entries, not exits. Tune `TAKE_PROFIT_MULT` / `TAKE_PROFIT_SELL_PCT`.
-
-## Anti-honeypot protection
-
-Before buying, the gate **proves the token can actually be sold** — the single
-biggest defense against rug/honeypot tokens:
-
-- **DEX / graduated tokens** → `honeypot.is` simulates a real buy **and sell**
-  and reports whether the sell works and the tax (`honeypot.py`).
-- **four.meme on-curve tokens** → four.meme's `trySell` must succeed, and the
-  curve sell-tax is checked (`fourmeme.sellable`).
-- A token that can't be sold is rejected regardless of `STRICT_SAFETY`; tax over
-  `MAX_HONEYPOT_TAX_PCT` is rejected. Plus liquidity, age, and GoPlus flags.
-
-## Telegram commands
-
-DM these to your bot (they also appear in Telegram's `/` menu):
-
-- **/menu** — a button menu for everything below.
-- **/wallet** — total wallet value (native coin + token holdings).
-- **/pause** · **/resume** — stop / start auto-buying without touching the server.
-- **/positions** — your open holdings: ROI, current value, and whether the 2x
-  trim has fired, plus total open value.
-- **/sell** — lists each tracked position with **Sell 50% / Sell 100%** buttons.
-- **/sell `<address>`** — sell *any* token in your wallet by its contract
-  address, even one the bot isn't tracking (reads the real on-chain balance).
-- **/scan** — list every token actually held in the wallet (via an explorer),
-  each with sell buttons. Needs a free `BSCSCAN_API_KEY` from etherscan.io/apis
-  (one Etherscan V2 key covers BSC; the old bscscan.com API is deprecated).
-- **/menu** — button menu with everything above, plus the current mode/settings.
-
-All selling uses your **live on-chain balance** as the source of truth, and a
-swap that reverts on-chain is reported as a failure (never a false success).
-
-## Gas guard
-
-A buy is skipped when estimated gas would eat too much of the position —
-`gas > MAX_GAS_PCT` of `BUY_AMOUNT_USD` (default 25%), or an optional hard cap
-`MAX_GAS_USD`. It runs in DRY_RUN too, so you'll see `⛽ skipped` messages while
-simulating. This mostly bites on Ethereum mainnet; BSC/Base/Solana rarely trip
-it. **Sells are never gas-guarded** — the bot must always be able to exit.
-
-## Files
-
-- `main.py` — orchestration (channel reader + auto/confirm buy + monitor task)
-- `extractor.py` — finds EVM + Solana addresses, drops bot/referral noise
-- `market.py` — DexScreener: resolves chain + price + liquidity for any address
-- `chains.py` — the chain registry (add a chain here)
-- `safety.py` — DexScreener + GoPlus → pass/fail verdict, any chain
-- `executor.py` — dispatcher: USD sizing + DRY_RUN, routes to the adapter
-- `evm_executor.py` — 0x aggregator swaps + web3 signing (all EVM chains)
-- `fourmeme.py` — trade four.meme launchpad tokens (BSC) still on the bonding
-  curve, which 0x can't reach until they graduate; routed automatically
-- `solana_executor.py` — Jupiter Ultra swaps + balance reads (Solana)
-- `positions.py` — open-position ledger, persisted to `positions.json`
-- `monitor.py` — background loop: re-price positions, sell 50% at 2x
-- `gas.py` — estimate swap gas in USD; gate buys so fees don't eat the position
-- `config.py` — env-driven settings
-
-## Notes / verify against live APIs
-
-- The EVM live-swap path (0x quote → approve → sign → send) is standard but
-  **swap it a tiny amount first** on one chain before trusting it hands-off;
-  gas/nonce/approval behavior varies by chain and RPC.
-- GoPlus field names differ slightly across EVM vs Solana; `safety.py` reads
-  them defensively. Eyeball one real response and adjust thresholds.
-- `positions.json` is your holdings ledger — git-ignored, survives restarts.
-  Stop the bot before hand-editing it.
-- Consider a per-day spend cap and a stop-loss (neither is built in yet). Gas
-  guarding and a /positions view are built in.
+## Utilities
+- `list_chats.py` — list your channels/topics with their IDs.

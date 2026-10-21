@@ -153,6 +153,30 @@ def _zone_text(instrument: str, z: dict) -> str:
     return f"{z['label']} {_fmt(instrument, z['low'])}–{_fmt(instrument, z['high'])}"
 
 
+def _zones_message() -> str:
+    zs = _load()
+    if not zs:
+        return ("📭 No zones being watched. They're added when you confirm a narrative, "
+                "or type one like `GU 1.2850 1.2870 OB`.")
+    lines = ["🎯 *Watched zones*"]
+    for z in zs:
+        lines.append(f"  • `{z['id']}` {z['instrument']} {_zone_text(z['instrument'], z)}")
+    lines.append("\nClear one: `/fxclear <id>` · a pair: `/fxclear EURUSD` · all: `/fxclear all`")
+    return "\n".join(lines)
+
+
+async def _health_message() -> str:
+    lines = ["*Live prices (Yahoo):*"]
+    for ins in _INSTRUMENTS:
+        p = await asyncio.to_thread(price, ins)
+        lines.append(f"  • {ins}: {_fmt(ins, p) if p else '❌ unavailable'}")
+    gem = "set ✅" if config.GEMINI_API_KEY else "❌ not set"
+    lines.append(f"\nGemini key: {gem} · model {config.GEMINI_MODEL}")
+    dest = "the channel" if config.FX_ALERT_TARGET == "channel" else "you (DM)"
+    lines.append(f"Alerts → {dest} · within {config.FX_NEAR_PIPS:g} pips")
+    return "\n".join(lines)
+
+
 # ── registration ──────────────────────────────────────────────────────
 def register(user_client, bot_client, notify):
     """Attach all handlers. `notify(text)` DMs the owner via the bot."""
@@ -253,16 +277,7 @@ def register(user_client, bot_client, notify):
     # 4) commands
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/zones"))
     async def _on_zones(event):
-        zs = _load()
-        if not zs:
-            await event.reply("📭 No zones being watched. They're added when you confirm "
-                              "a narrative, or type one like `GU 1.2850 1.2870 OB`.")
-            return
-        lines = ["🎯 *Watched zones*"]
-        for z in zs:
-            lines.append(f"  • `{z['id']}` {z['instrument']} {_zone_text(z['instrument'], z)}")
-        lines.append(f"\nClear one: `/fxclear <id>` · clear a pair: `/fxclear EURUSD` · all: `/fxclear all`")
-        await event.reply("\n".join(lines))
+        await event.reply(_zones_message())
 
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxclear"))
     async def _on_clear(event):
@@ -283,15 +298,36 @@ def register(user_client, bot_client, notify):
 
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxtest"))
     async def _on_test(event):
-        await event.reply("🔧 Checking live prices + Gemini…")
-        lines = ["*Live prices (Yahoo):*"]
-        for ins in _INSTRUMENTS:
-            p = await asyncio.to_thread(price, ins)
-            lines.append(f"  • {ins}: {_fmt(ins, p) if p else '❌ unavailable'}")
-        gem = "set ✅" if config.GEMINI_API_KEY else "❌ GEMINI_API_KEY not set"
-        lines.append(f"\nGemini key: {gem}  · model {config.GEMINI_MODEL}")
-        lines.append(f"Alerts go to: {config.FX_ALERT_TARGET} · within {config.FX_NEAR_PIPS:g} pips")
-        await event.reply("\n".join(lines))
+        m = await event.reply("🔧 Checking…")
+        await m.edit(await _health_message())
+
+    # ── FX menu ────────────────────────────────────────────────────────
+    def _menu_markup():
+        return [[Button.inline("🎯 Zones", b"fxmenu:zones"),
+                 Button.inline("🧪 Health", b"fxmenu:health")],
+                [Button.inline("🧹 Clear all", b"fxmenu:clearall")]]
+
+    _menu_title = ("📡 *FX Signals menu*\n"
+                   "Watching the Narratives topic · EURUSD / GBPUSD / DXY / XAUUSD.\n"
+                   "Confirm levels when a narrative posts, or type one like "
+                   "`GU 1.2850 1.2870 OB`.")
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/(menu|start)"))
+    async def _on_menu(event):
+        await event.reply(_menu_title, buttons=_menu_markup())
+
+    @bot_client.on(events.CallbackQuery(pattern=rb"^fxmenu:"))
+    async def _on_menu_click(event):
+        what = event.data.decode().split(":", 1)[1]
+        await event.answer()
+        if what == "zones":
+            await event.respond(_zones_message())
+        elif what == "health":
+            m = await event.respond("🔧 Checking…")
+            await m.edit(await _health_message())
+        elif what == "clearall":
+            _save([])
+            await event.respond("🧹 Cleared all zones.")
 
 
 # ── watch loop ────────────────────────────────────────────────────────
@@ -303,10 +339,11 @@ async def run(bot_client, notify):
         if config.FX_ALERT_TARGET == "channel":
             try:
                 await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
-                                              reply_to=config.FX_NARRATIVES_TOPIC)
+                                              reply_to=config.FX_ALERT_TOPIC)
                 return
             except Exception:  # noqa: BLE001 — bot not in channel -> fall back to DM
-                pass
+                await notify("⚠️ (couldn't post in the channel — is the bot added there "
+                             "as admin? Falling back to DM.)")
         await notify(text)
 
     while True:

@@ -31,7 +31,8 @@ async def _register_commands() -> None:
     """Show only the FX commands in Telegram's '/' menu."""
     try:
         from telethon.tl import functions, types
-        cmds = [("zones", "Watched price zones"),
+        cmds = [("menu", "FX menu"),
+                ("zones", "Watched price zones"),
                 ("fxclear", "Clear zones (id / pair / all)"),
                 ("fxtest", "Health check: prices + Gemini")]
         await bot_client(functions.bots.SetBotCommandsRequest(
