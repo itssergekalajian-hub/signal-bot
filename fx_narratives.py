@@ -307,6 +307,70 @@ def register(user_client, bot_client, notify):
                 break
         return done
 
+    # 1c) full scan: find the CURRENT narrative per instrument (latest chart
+    #     wins) and lock in only the levels price hasn't reached yet.
+    async def _sync() -> str:
+        from telethon.tl.types import PeerChannel
+        latest = {}  # instrument -> (message, bias); first seen = newest
+        async for msg in user_client.iter_messages(
+                PeerChannel(config.FX_CHANNEL_ID),
+                reply_to=config.FX_NARRATIVES_TOPIC, limit=1000):
+            if not msg.photo:
+                continue
+            inst, bias = _instrument_of(msg.message or "")
+            if inst in _INSTRUMENTS and inst not in latest:
+                latest[inst] = (msg, bias)
+            if len(latest) == len(_INSTRUMENTS):
+                break
+        if not latest:
+            return "Scanned the topic but found no charts I recognise."
+
+        # drop existing zones for the instruments we're refreshing
+        _save([z for z in _load() if z["instrument"] not in latest])
+
+        out = ["🧭 *Channel scan — current pending targets*"]
+        any_pending = False
+        for inst in _INSTRUMENTS:
+            if inst not in latest:
+                continue
+            msg, bias = latest[inst]
+            try:
+                blob = await msg.download_media(file=bytes)
+                zones = await asyncio.to_thread(read_levels, blob, "image/jpeg", inst)
+            except Exception:  # noqa: BLE001
+                zones = []
+            p = await asyncio.to_thread(price, inst)
+            out.append(f"\n{_bias_emoji(bias)} *{inst}* — now `{_fmt(inst, p) if p else '?'}`")
+            if not zones:
+                out.append("  _latest chart unreadable_")
+                continue
+            pend = []
+            for z in zones:
+                lo, hi = sorted((float(z["low"]), float(z["high"])))
+                zz = {"label": z.get("label", "AOI"), "low": lo, "high": hi}
+                if p and lo <= p <= hi:
+                    out.append(f"  ✔️ {zz['label']} `{_range_text(inst, zz)}` — price already here")
+                else:
+                    pend.append(z)
+                    away = f" · {_pips_away(inst, p, zz):.0f} pips" if p else ""
+                    out.append(f"  🎯 {zz['label']} `{_range_text(inst, zz)}`{away}")
+            if pend:
+                any_pending = True
+                _add_zones(inst, bias, pend)
+        out.append(f"\n🔔 Locked in as targets — alerts within {config.FX_NEAR_PIPS:g} pips."
+                   if any_pending else "\n_Nothing pending — price is already at every level._")
+        return "\n".join(out)
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxsync"))
+    async def _on_sync(event):
+        m = await event.reply("🔎 Scanning the entire Narratives topic…")
+        try:
+            txt = await _sync()
+        except Exception as e:  # noqa: BLE001
+            await m.edit(f"Scan failed: {e}")
+            return
+        await m.edit(txt)
+
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxlast"))
     async def _on_last(event):
         parts = event.raw_text.split()
@@ -385,9 +449,9 @@ def register(user_client, bot_client, notify):
 
     # ── FX menu ────────────────────────────────────────────────────────
     def _menu_markup():
-        return [[Button.inline("🎯 Zones", b"fxmenu:zones"),
-                 Button.inline("🧪 Health", b"fxmenu:health")],
-                [Button.inline("📥 Read last charts", b"fxmenu:last"),
+        return [[Button.inline("🔁 Scan channel", b"fxmenu:sync"),
+                 Button.inline("🎯 Zones", b"fxmenu:zones")],
+                [Button.inline("🧪 Health", b"fxmenu:health"),
                  Button.inline("🧹 Clear all", b"fxmenu:clearall")]]
 
     _menu_title = ("📡 *FX Signals menu*\n"
@@ -420,6 +484,12 @@ def register(user_client, bot_client, notify):
                 return
             await m.edit(f"✅ Locked in {done} recent chart(s). /zones to see them."
                          if done else "No readable charts in the recent posts.")
+        elif what == "sync":
+            m = await event.respond("🔎 Scanning the entire Narratives topic…")
+            try:
+                await m.edit(await _sync())
+            except Exception as e:  # noqa: BLE001
+                await m.edit(f"Scan failed: {e}")
 
 
 # ── watch loop ────────────────────────────────────────────────────────

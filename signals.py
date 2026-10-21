@@ -32,6 +32,7 @@ async def _register_commands() -> None:
     try:
         from telethon.tl import functions, types
         cmds = [("menu", "FX menu"),
+                ("fxsync", "Scan whole channel for pending targets"),
                 ("zones", "Watched price zones"),
                 ("fxlast", "Lock in recent charts"),
                 ("fxclear", "Clear zones (id / pair / all)"),
