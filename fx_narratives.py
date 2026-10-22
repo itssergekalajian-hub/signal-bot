@@ -622,6 +622,17 @@ def register(user_client, bot_client, notify):
     async def _on_menu(event):
         await event.reply(_menu_title, buttons=_menu_markup())
 
+    # Anyone else who starts the bot (e.g. the person you want alerts sent to)
+    # gets their numeric ID, which you set as FX_ALERT_TARGET to receive alerts.
+    @bot_client.on(events.NewMessage(pattern=r"^/(start|id|myid)"))
+    async def _on_whoami(event):
+        if event.sender_id == owner:
+            return  # the owner's /start opens the menu above
+        await event.reply(
+            f"👋 You're connected to the FX Signals bot.\n\n"
+            f"Your Telegram ID is:  `{event.sender_id}`\n\n"
+            "Send this ID to the bot owner so they can route the alerts to you.")
+
     @bot_client.on(events.CallbackQuery(pattern=rb"^fxmenu:"))
     async def _on_menu_click(event):
         what = event.data.decode().split(":", 1)[1]
