@@ -252,38 +252,50 @@ def _reached_msg(z: dict, p: float) -> str:
     return "\n".join(lines)
 
 
-_delivery_warned = False
+_delivery_warned = set()
 
 
 async def deliver(bot_client, notify, text: str) -> None:
-    """Send an area-of-interest notification to the configured destination.
+    """Send an area-of-interest notification to EVERY configured destination.
 
-    FX_ALERT_TARGET can be:
-      "owner"           -> DM the owner via the bot (always works)
-      "channel"         -> post into FX_CHANNEL_ID's FX_ALERT_TOPIC
-      "@name" / id      -> post to that channel/group/user (bot must be able to)
-    Any failure falls back to the owner DM (warned once).
+    FX_ALERT_TARGET is a comma-separated list; each item is one of:
+      "owner"       -> DM the owner via the bot
+      "channel"     -> post into FX_CHANNEL_ID's FX_ALERT_TOPIC
+      "@name" / id  -> that channel/group/user (bot must be able to reach it)
+    e.g. FX_ALERT_TARGET=owner,8376538197,@mychannel
+    Each destination is tried independently; failures warn once and don't stop
+    the others.
     """
-    global _delivery_warned
-    tgt = (config.FX_ALERT_TARGET or "owner").strip()
-    try:
-        if tgt == "owner":
+    targets = [t.strip() for t in (config.FX_ALERT_TARGET or "owner").split(",") if t.strip()]
+    if not targets:
+        targets = ["owner"]
+    delivered = False
+    for tgt in targets:
+        try:
+            if tgt == "owner":
+                await notify(text)
+            elif tgt == "channel":
+                from telethon.tl.types import PeerChannel
+                await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
+                                              reply_to=config.FX_ALERT_TOPIC)
+            else:
+                dest = int(tgt) if tgt.lstrip("-").isdigit() else tgt
+                await bot_client.send_message(dest, text)
+            delivered = True
+        except Exception:  # noqa: BLE001 — can't reach this one -> warn once, keep going
+            if tgt not in _delivery_warned:
+                _delivery_warned.add(tgt)
+                try:
+                    await notify(f"⚠️ Couldn't deliver to `{tgt}` — if it's a person they must "
+                                 "press Start on the bot; if it's a channel/group, add the bot "
+                                 "there (admin to post). Still sending to the others.")
+                except Exception:  # noqa: BLE001
+                    pass
+    if not delivered:
+        try:
             await notify(text)
-            return
-        if tgt == "channel":
-            from telethon.tl.types import PeerChannel
-            await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
-                                          reply_to=config.FX_ALERT_TOPIC)
-            return
-        dest = int(tgt) if tgt.lstrip("-").isdigit() else tgt   # @username or numeric id
-        await bot_client.send_message(dest, text)
-    except Exception:  # noqa: BLE001 — not added / can't message -> fall back to DM
-        if not _delivery_warned:
-            await notify(f"⚠️ Couldn't deliver to `{tgt}` — if it's a channel/group, add the "
-                         "bot there (as admin to post); if it's a person, they must press "
-                         "Start on the bot first. Sending to you for now.")
-            _delivery_warned = True
-        await notify(text)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _zones_message() -> str:
@@ -321,8 +333,9 @@ async def _health_message() -> str:
                      else f"   ❌ {ins}:  unavailable")
     gkey = "✅" if config.GEMINI_API_KEY else "❌ no key"
     mode = "fully automatic" if config.FX_AUTO_CONFIRM else "confirm-first"
-    tgt = (config.FX_ALERT_TARGET or "owner").strip()
-    dest = {"owner": "you (DM)", "channel": "the signal channel"}.get(tgt, tgt)
+    _names = {"owner": "you (DM)", "channel": "the signal channel"}
+    dest = ", ".join(_names.get(t.strip(), t.strip())
+                     for t in (config.FX_ALERT_TARGET or "owner").split(",") if t.strip())
     lines += ["\n*Chart reading*",
               f"   Gemini `{config.GEMINI_MODEL}` {gkey}",
               "\n*Alerts*",
