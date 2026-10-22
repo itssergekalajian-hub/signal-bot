@@ -53,7 +53,8 @@ async def main():
     fx_narratives.register(user_client, bot_client, _notify)
 
     gem = "Gemini auto-read ON" if config.GEMINI_API_KEY else "Gemini key missing — manual entry only"
-    dest = "the channel" if config.FX_ALERT_TARGET == "channel" else "you (DM)"
+    _tgt = (config.FX_ALERT_TARGET or "owner").strip()
+    dest = {"owner": "you (DM)", "channel": "the signal channel"}.get(_tgt, _tgt)
     print(f"FX signals bot running. Narratives topic {config.FX_NARRATIVES_TOPIC} "
           f"of channel {config.FX_CHANNEL_ID}. {gem}.")
     await _notify(

@@ -252,6 +252,40 @@ def _reached_msg(z: dict, p: float) -> str:
     return "\n".join(lines)
 
 
+_delivery_warned = False
+
+
+async def deliver(bot_client, notify, text: str) -> None:
+    """Send an area-of-interest notification to the configured destination.
+
+    FX_ALERT_TARGET can be:
+      "owner"           -> DM the owner via the bot (always works)
+      "channel"         -> post into FX_CHANNEL_ID's FX_ALERT_TOPIC
+      "@name" / id      -> post to that channel/group/user (bot must be able to)
+    Any failure falls back to the owner DM (warned once).
+    """
+    global _delivery_warned
+    tgt = (config.FX_ALERT_TARGET or "owner").strip()
+    try:
+        if tgt == "owner":
+            await notify(text)
+            return
+        if tgt == "channel":
+            from telethon.tl.types import PeerChannel
+            await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
+                                          reply_to=config.FX_ALERT_TOPIC)
+            return
+        dest = int(tgt) if tgt.lstrip("-").isdigit() else tgt   # @username or numeric id
+        await bot_client.send_message(dest, text)
+    except Exception:  # noqa: BLE001 — not added / can't message -> fall back to DM
+        if not _delivery_warned:
+            await notify(f"⚠️ Couldn't deliver to `{tgt}` — if it's a channel/group, add the "
+                         "bot there (as admin to post); if it's a person, they must press "
+                         "Start on the bot first. Sending to you for now.")
+            _delivery_warned = True
+        await notify(text)
+
+
 async def _zones_message() -> str:
     zs = _load()
     if not zs:
@@ -287,7 +321,8 @@ async def _health_message() -> str:
                      else f"   ❌ {ins}:  unavailable")
     gkey = "✅" if config.GEMINI_API_KEY else "❌ no key"
     mode = "fully automatic" if config.FX_AUTO_CONFIRM else "confirm-first"
-    dest = "the channel" if config.FX_ALERT_TARGET == "channel" else "you (DM)"
+    tgt = (config.FX_ALERT_TARGET or "owner").strip()
+    dest = {"owner": "you (DM)", "channel": "the signal channel"}.get(tgt, tgt)
     lines += ["\n*Chart reading*",
               f"   Gemini `{config.GEMINI_MODEL}` {gkey}",
               "\n*Alerts*",
@@ -364,7 +399,7 @@ def register(user_client, bot_client, notify):
             lines.append(f"\n🔔 I'll alert within {config.FX_NEAR_PIPS:g} pips, and again when "
                          f"price reaches it (then it clears itself).")
             lines.append(f"_Wrong read? `/fxclear {instrument}` to drop these._")
-            await bot_client.send_message(owner, "\n".join(lines))
+            await deliver(bot_client, notify, "\n".join(lines))
         else:
             await _propose(instrument, bias, zones)
         return True
@@ -621,24 +656,9 @@ def register(user_client, bot_client, notify):
 # ── watch loop ────────────────────────────────────────────────────────
 async def run(bot_client, notify):
     """Poll live prices; alert when price nears a watched zone."""
-    from telethon.tl.types import PeerChannel
-
-    warned = False  # only nag once if channel posting isn't set up
 
     async def _alert(text):
-        nonlocal warned
-        if config.FX_ALERT_TARGET == "channel":
-            try:
-                await bot_client.send_message(PeerChannel(config.FX_CHANNEL_ID), text,
-                                              reply_to=config.FX_ALERT_TOPIC)
-                return
-            except Exception:  # noqa: BLE001 — bot not in channel -> fall back to DM
-                if not warned:
-                    await notify("⚠️ Can't post in the channel yet — add the bot there as "
-                                 "admin (with Post Messages). Sending alerts to you by DM "
-                                 "for now.")
-                    warned = True
-        await notify(text)
+        await deliver(bot_client, notify, text)
 
     while True:
         try:
