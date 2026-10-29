@@ -56,3 +56,7 @@ PAPER_BE_AT_R         = float(os.getenv("PAPER_BE_AT_R", "1"))          # move s
 PAPER_EXPIRE_HOURS    = float(os.getenv("PAPER_EXPIRE_HOURS", "72"))    # drop un-triggered setups after
 PAPER_FILE            = os.getenv("PAPER_FILE", "paper_trades.json")
 PAPER_POLL_SEC        = int(os.getenv("PAPER_POLL_SEC", "60"))
+# Where paper-trading messages (entries, results) go — SEPARATE from the
+# area-of-interest alerts. Default "owner" = you only. Same format as
+# FX_ALERT_TARGET (owner / channel / id / @username, comma-separated).
+PAPER_ALERT_TARGET = os.getenv("PAPER_ALERT_TARGET", "owner")

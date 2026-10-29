@@ -133,7 +133,7 @@ async def _close(bot_client, notify, s, result_R, price_now):
     await deliver(bot_client, notify,
                   f"{tag} — paper {ins} {s['bias']}\n"
                   f"📍 {s['label']} · exit `{_fmtp(ins, price_now)}`\n"
-                  f"*Result: {result_R:+.1f}R*")
+                  f"*Result: {result_R:+.1f}R*", target=config.PAPER_ALERT_TARGET)
 
 
 async def _open(bot_client, notify, s, entry, sl, tp):
@@ -143,7 +143,7 @@ async def _open(bot_client, notify, s, entry, sl, tp):
                   f"📝 *PAPER entry* — {_bias_emoji(s['bias'])} {ins} {s['bias']}\n"
                   f"📍 {s['label']}\n"
                   f"🎯 Entry `{_fmtp(ins, entry)}` · SL `{_fmtp(ins, sl)}` · "
-                  f"TP `{_fmtp(ins, tp)}` ({config.PAPER_TP_R:g}R)")
+                  f"TP `{_fmtp(ins, tp)}` ({config.PAPER_TP_R:g}R)", target=config.PAPER_ALERT_TARGET)
 
 
 async def run(bot_client, notify):

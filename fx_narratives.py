@@ -256,18 +256,19 @@ def _reached_msg(z: dict, p: float) -> str:
 _delivery_warned = set()
 
 
-async def deliver(bot_client, notify, text: str) -> None:
-    """Send an area-of-interest notification to EVERY configured destination.
+async def deliver(bot_client, notify, text: str, target: str | None = None) -> None:
+    """Send a notification to every destination in `target` (or FX_ALERT_TARGET).
 
-    FX_ALERT_TARGET is a comma-separated list; each item is one of:
+    The target string is a comma-separated list; each item is one of:
       "owner"       -> DM the owner via the bot
       "channel"     -> post into FX_CHANNEL_ID's FX_ALERT_TOPIC
       "@name" / id  -> that channel/group/user (bot must be able to reach it)
     e.g. FX_ALERT_TARGET=owner,8376538197,@mychannel
     Each destination is tried independently; failures warn once and don't stop
-    the others.
+    the others. Pass `target` to override (paper trading uses its own).
     """
-    targets = [t.strip() for t in (config.FX_ALERT_TARGET or "owner").split(",") if t.strip()]
+    targets = [t.strip() for t in ((target if target is not None else config.FX_ALERT_TARGET)
+                                   or "owner").split(",") if t.strip()]
     if not targets:
         targets = ["owner"]
     delivered = False
