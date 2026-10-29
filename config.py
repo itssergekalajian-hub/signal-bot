@@ -23,7 +23,7 @@ TG_OWNER_ID  = int(os.getenv("TG_OWNER_ID", "0"))
 # zones off each chart, you confirm, then it alerts when live price (Yahoo
 # Finance, free) nears a zone. All free: Gemini free tier + Yahoo.
 GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL        = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_MODEL        = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 FX_CHANNEL_ID       = int(os.getenv("FX_CHANNEL_ID", "4427092169"))
 FX_NARRATIVES_TOPIC = int(os.getenv("FX_NARRATIVES_TOPIC", "2"))
 # Where "price nearing" alerts go: "channel" = post into the signal channel
