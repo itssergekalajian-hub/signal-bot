@@ -113,16 +113,17 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     zones = []
-    for attempt in range(3):  # free tier can transiently rate-limit / return empty
+    for attempt in range(4):
         try:
             r = requests.post(url, json=body, timeout=45)
+            if r.status_code == 429:           # rate-limited -> wait longer and retry
+                time.sleep(15 * (attempt + 1))
+                continue
             txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             zones = json.loads(txt).get("zones", [])
-            if zones or r.status_code == 200:
-                break
-        except Exception:  # noqa: BLE001 — bad key / quota / parse -> retry then give up
-            pass
-        time.sleep(2)
+            break
+        except Exception:  # noqa: BLE001 — transient/parse -> back off and retry
+            time.sleep(3 * (attempt + 1))
     out = []
     for z in zones:
         try:
