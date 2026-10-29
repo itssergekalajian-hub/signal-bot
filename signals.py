@@ -34,6 +34,8 @@ async def _register_commands() -> None:
         cmds = [("menu", "Open the FX menu"),
                 ("fxsync", "Scan the channel for current targets"),
                 ("zones", "Your live watchlist"),
+                ("pstats", "Paper-trading scorecard"),
+                ("ptrades", "Paper trades (open + recent)"),
                 ("fxlast", "Re-read the last N charts"),
                 ("fxclear", "Remove zones (id / pair / all)"),
                 ("fxtest", "System status"),
@@ -69,7 +71,15 @@ async def main():
         user_client.run_until_disconnected(),
         bot_client.run_until_disconnected(),
         fx_narratives.run(bot_client, _notify),
+        _paper_loop(),
     )
+
+
+async def _paper_loop():
+    if not config.PAPER_ENABLED:
+        return
+    import paper_trader
+    await paper_trader.run(bot_client, _notify)
 
 
 if __name__ == "__main__":

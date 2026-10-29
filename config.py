@@ -41,3 +41,18 @@ FX_AUTO_CONFIRM = _b("FX_AUTO_CONFIRM", True)
 # Cap how many zones to watch per instrument (keeps the nearest-to-price ones,
 # avoids alert spam when a chart has many lines).
 FX_MAX_ZONES = int(os.getenv("FX_MAX_ZONES", "6"))
+
+# ── Paper trading (simulation only — no money, no broker) ──────────────
+# When a zone with a known bias (📈/📉) locks in, it becomes a paper setup.
+# Entry waits for a confirmation (price reacting back out of the zone), stop
+# sits beyond the zone, target is PAPER_TP_R in R. Break-even moves the stop to
+# entry at +PAPER_BE_AT_R. Results are logged in R, like the channel's backtest.
+PAPER_ENABLED         = _b("PAPER_ENABLED", True)
+PAPER_CONFIRM_PIPS    = float(os.getenv("PAPER_CONFIRM_PIPS", "5"))     # reaction out of zone = confirm
+PAPER_INVALIDATE_PIPS = float(os.getenv("PAPER_INVALIDATE_PIPS", "10")) # through the zone = setup dead
+PAPER_SL_BUFFER_PIPS  = float(os.getenv("PAPER_SL_BUFFER_PIPS", "3"))   # stop sits this far past the zone
+PAPER_TP_R            = float(os.getenv("PAPER_TP_R", "2"))             # take profit in R
+PAPER_BE_AT_R         = float(os.getenv("PAPER_BE_AT_R", "1"))          # move stop to entry at +this R
+PAPER_EXPIRE_HOURS    = float(os.getenv("PAPER_EXPIRE_HOURS", "72"))    # drop un-triggered setups after
+PAPER_FILE            = os.getenv("PAPER_FILE", "paper_trades.json")
+PAPER_POLL_SEC        = int(os.getenv("PAPER_POLL_SEC", "60"))

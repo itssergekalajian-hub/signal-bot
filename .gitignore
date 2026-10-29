@@ -28,3 +28,7 @@ scan_output/
 # FX zones store
 fx_zones.json
 fx_zones.json.tmp
+
+# Paper trading ledger
+paper_trades.json
+paper_trades.json.tmp

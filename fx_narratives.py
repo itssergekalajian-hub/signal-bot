@@ -115,7 +115,7 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
     zones = []
     for attempt in range(4):
         try:
-            r = requests.post(url, json=body, timeout=45)
+            r = requests.post(url, json=body, timeout=90)
             if r.status_code == 429:           # rate-limited -> wait longer and retry
                 time.sleep(15 * (attempt + 1))
                 continue
@@ -149,7 +149,7 @@ def gemini_probe(image_bytes: bytes, mime: str, instrument: str) -> str:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     try:
-        r = requests.post(url, json=body, timeout=45)
+        r = requests.post(url, json=body, timeout=90)
     except Exception as e:  # noqa: BLE001
         return f"request failed: {e}"
     try:
@@ -406,6 +406,8 @@ def register(user_client, bot_client, notify):
         zones = _limit_zones(instrument, p, zones)
         if config.FX_AUTO_CONFIRM:
             _add_zones(instrument, bias, zones)
+            import paper_trader
+            paper_trader.add_setups(instrument, bias, zones)
             lines = [f"{_bias_emoji(bias)} *{instrument} — narrative locked in*",
                      "Areas of interest now being watched:"]
             for z in zones:
@@ -492,6 +494,8 @@ def register(user_client, bot_client, notify):
             if pend:
                 any_pending = True
                 _add_zones(inst, bias, pend)
+                import paper_trader
+                paper_trader.add_setups(inst, bias, pend)
             await asyncio.sleep(1.5)            # ease the free-tier rate limit
         out.append(f"\n🔔 Locked in as targets — alerts within {config.FX_NEAR_PIPS:g} pips."
                    if any_pending else "\n_Nothing pending — price is already at every level._")
@@ -601,6 +605,23 @@ def register(user_client, bot_client, notify):
     async def _on_test(event):
         m = await event.reply("🔧 Checking…")
         await m.edit(await _health_message())
+
+    # ── paper-trading commands ──────────────────────────────────────────
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/pstats"))
+    async def _on_pstats(event):
+        import paper_trader
+        await event.reply(paper_trader.stats_message())
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/ptrades"))
+    async def _on_ptrades(event):
+        import paper_trader
+        await event.reply(paper_trader.trades_message())
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/pclear"))
+    async def _on_pclear(event):
+        import paper_trader
+        paper_trader.clear()
+        await event.reply("🧹 Paper-trading ledger reset.")
 
     # ── FX menu ────────────────────────────────────────────────────────
     def _menu_markup():
