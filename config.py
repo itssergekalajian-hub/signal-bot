@@ -24,6 +24,11 @@ TG_OWNER_ID  = int(os.getenv("TG_OWNER_ID", "0"))
 # Finance, free) nears a zone. All free: Gemini free tier + Yahoo.
 GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL        = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Chart reading rotates through these in order; if one is out of free quota
+# (HTTP 429) or unavailable (404), it falls to the next. Set a comma-separated
+# list of models your key can use.
+GEMINI_MODELS       = os.getenv("GEMINI_MODELS",
+                                "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-lite-latest")
 FX_CHANNEL_ID       = int(os.getenv("FX_CHANNEL_ID", "4427092169"))
 FX_NARRATIVES_TOPIC = int(os.getenv("FX_NARRATIVES_TOPIC", "2"))
 # Where "price nearing" alerts go: "channel" = post into the signal channel
