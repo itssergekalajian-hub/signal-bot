@@ -42,7 +42,8 @@ def _save(rows: list[dict]) -> None:
 
 def add_setups(instrument: str, bias: str, zones: list[dict]) -> int:
     """Turn freshly locked-in zones (with a direction) into paper setups."""
-    if not config.PAPER_ENABLED or bias not in ("bullish", "bearish"):
+    # DXY is a bias indicator, not a tradeable pair — never open setups on it.
+    if not config.PAPER_ENABLED or bias not in ("bullish", "bearish") or instrument == "DXY":
         return 0
     cur = _load()
     live = {(s["instrument"], round(s["low"], 5), round(s["high"], 5))
