@@ -113,9 +113,9 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     zones = []
-    for attempt in range(4):
+    for attempt in range(2):
         try:
-            r = requests.post(url, json=body, timeout=90)
+            r = requests.post(url, json=body, timeout=40)
             if r.status_code == 429:           # rate-limited -> wait longer and retry
                 time.sleep(15 * (attempt + 1))
                 continue
@@ -149,7 +149,7 @@ def gemini_probe(image_bytes: bytes, mime: str, instrument: str) -> str:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     try:
-        r = requests.post(url, json=body, timeout=90)
+        r = requests.post(url, json=body, timeout=40)
     except Exception as e:  # noqa: BLE001
         return f"request failed: {e}"
     try:
