@@ -91,13 +91,34 @@ def _gemini_models() -> list[str]:
     return [m.strip() for m in raw.split(",") if m.strip()] or [config.GEMINI_MODEL]
 
 
+def _gemini_keys() -> list[str]:
+    """GEMINI_API_KEY may be several keys (comma-separated) to multiply quota."""
+    return [k.strip() for k in (config.GEMINI_API_KEY or "").split(",") if k.strip()]
+
+
+def _gemini_call(body: dict):
+    """Try each (key, model) until one returns 200. Returns parsed JSON or None."""
+    for key in _gemini_keys():
+        for model in _gemini_models():
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{model}:generateContent?key={key}")
+            try:
+                r = requests.post(url, json=body, timeout=40)
+                if r.status_code != 200:      # 429 quota / 404 unavailable -> next combo
+                    continue
+                return r.json()
+            except Exception:  # noqa: BLE001 — network/parse -> next combo
+                continue
+    return None
+
+
 def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
     """Ask Gemini to read the drawn price zones off the chart. [] on failure.
 
-    Rotates through GEMINI_MODELS: a model that's out of free quota (429) or
+    Rotates through every (key, model): one that's out of free quota (429) or
     unavailable (404) is skipped and the next is tried.
     """
-    if not config.GEMINI_API_KEY:
+    if not _gemini_keys():
         return []
     prompt = (
         f"This is a TradingView chart of {instrument}. A trader has drawn a FEW specific "
@@ -120,18 +141,12 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     zones = []
-    for model in _gemini_models():
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model}:generateContent?key={config.GEMINI_API_KEY}")
+    j = _gemini_call(body)
+    if j:
         try:
-            r = requests.post(url, json=body, timeout=40)
-            if r.status_code != 200:          # 429 quota / 404 unavailable -> next model
-                continue
-            txt = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            zones = json.loads(txt).get("zones", [])
-            break
-        except Exception:  # noqa: BLE001 — network/parse -> try the next model
-            continue
+            zones = json.loads(j["candidates"][0]["content"]["parts"][0]["text"]).get("zones", [])
+        except Exception:  # noqa: BLE001
+            zones = []
     out = []
     for z in zones:
         try:
@@ -143,8 +158,9 @@ def read_levels(image_bytes: bytes, mime: str, instrument: str) -> list[dict]:
 
 
 def gemini_probe(image_bytes: bytes, mime: str, instrument: str) -> str:
-    """Diagnostic: try each model on a real chart; report which one works."""
-    if not config.GEMINI_API_KEY:
+    """Diagnostic: try each key×model on a real chart; report which one works."""
+    keys = _gemini_keys()
+    if not keys:
         return "GEMINI_API_KEY not set"
     body = {
         "contents": [{"parts": [
@@ -155,29 +171,30 @@ def gemini_probe(image_bytes: bytes, mime: str, instrument: str) -> str:
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     tried = []
-    for model in _gemini_models():
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model}:generateContent?key={config.GEMINI_API_KEY}")
-        try:
-            r = requests.post(url, json=body, timeout=40)
-        except Exception as e:  # noqa: BLE001
-            tried.append(f"{model}: request failed ({e})")
-            continue
-        if r.status_code == 200:
+    for ki, key in enumerate(keys, 1):
+        for model in _gemini_models():
+            url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+                   f"{model}:generateContent?key={key}")
             try:
-                txt = r.json()["candidates"][0]["content"]["parts"][0]["text"][:250]
-                head = f"✅ using *{model}* → {txt}"
-                return head + ("\n\nskipped: " + " · ".join(tried) if tried else "")
-            except Exception:  # noqa: BLE001
-                tried.append(f"{model}: 200 but no text")
+                r = requests.post(url, json=body, timeout=40)
+            except Exception as e:  # noqa: BLE001
+                tried.append(f"key{ki}/{model}: request failed ({e})")
                 continue
-        msg = ""
-        try:
-            msg = (r.json().get("error") or {}).get("message", "")[:70]
-        except Exception:  # noqa: BLE001
-            pass
-        tried.append(f"{model}: HTTP {r.status_code} {msg}")
-    return "❌ No model worked:\n" + "\n".join(tried)
+            if r.status_code == 200:
+                try:
+                    txt = r.json()["candidates"][0]["content"]["parts"][0]["text"][:220]
+                    head = f"✅ using *key{ki}/{model}* → {txt}"
+                    return head + (f"\n\nskipped: {len(tried)}" if tried else "")
+                except Exception:  # noqa: BLE001
+                    tried.append(f"key{ki}/{model}: 200 but no text")
+                    continue
+            msg = ""
+            try:
+                msg = (r.json().get("error") or {}).get("message", "")[:60]
+            except Exception:  # noqa: BLE001
+                pass
+            tried.append(f"key{ki}/{model}: HTTP {r.status_code} {msg}")
+    return f"❌ No key/model worked ({len(keys)} key(s)):\n" + "\n".join(tried[-8:])
 
 
 # ── live price (Yahoo Finance, free, no key) ──────────────────────────
