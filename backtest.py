@@ -170,6 +170,8 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
         # keep only zones that are entries (correct side), then the nearest one
         valid = []
         for (label, lo, hi) in clean:
+            if not fn.is_entry_zone(label, lo, hi):   # skip reference levels (W/WL/lines)
+                continue
             if bull and price0 < lo:        # zone above price = target, not entry
                 continue
             if (not bull) and price0 > hi:  # zone below price = target

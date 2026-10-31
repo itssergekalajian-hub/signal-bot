@@ -22,7 +22,7 @@ import secrets
 import time
 
 import config
-from fx_narratives import _PIP, _bias_emoji, _fmt, price, deliver
+from fx_narratives import _PIP, _bias_emoji, _fmt, price, deliver, is_entry_zone
 
 
 def _load() -> list[dict]:
@@ -54,6 +54,8 @@ def add_setups(instrument: str, bias: str, zones: list[dict]) -> int:
             lo, hi = sorted((float(z["low"]), float(z["high"])))
         except (KeyError, TypeError, ValueError):
             continue
+        if not is_entry_zone(z.get("label", ""), lo, hi):
+            continue  # only trade FVG/OB entries, not reference levels
         if (instrument, round(lo, 5), round(hi, 5)) in live:
             continue  # already tracking this zone
         cur.append({"id": secrets.token_hex(3), "instrument": instrument, "bias": bias,

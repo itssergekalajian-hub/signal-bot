@@ -41,6 +41,26 @@ _SHORT = {"EU": "EURUSD", "EURUSD": "EURUSD", "GU": "GBPUSD", "GBPUSD": "GBPUSD"
 # Instruments the bot actually trades/watches (override with FX_INSTRUMENTS).
 _INSTRUMENTS = [i.strip() for i in getattr(config, "FX_INSTRUMENTS",
                "EURUSD,GBPUSD,DXY,XAUUSD,AUDUSD").split(",") if i.strip()]
+
+
+# Zones we actually TRADE are the entries (FVG/OB/demand/supply) — the boxes.
+# Single-line reference levels (W/WL/highs/lows/liquidity) are targets, not
+# entries, so they're watched for alerts but never traded.
+_ENTRY_KEYS = ("FVG", "OB", "ORDER BLOCK", "DEMAND", "SUPPLY", "IMBALANCE", "BLOCK")
+
+
+def is_entry_zone(label: str, low=None, high=None) -> bool:
+    u = (label or "").upper()
+    if any(k in u for k in _ENTRY_KEYS):
+        return True
+    # unlabelled but a real box (not a single line) counts as a tradeable zone
+    if low is not None and high is not None and abs(float(high) - float(low)) > 1e-9 \
+            and not any(x in u for x in ("W", "WL", "WH", "HIGH", "LOW", "BSL",
+                                         "SSL", "PWH", "PWL", "PDH", "PDL", "EQ")):
+        return True
+    return False
+
+
 # one pip, per instrument (for the "within N pips" test)
 _PIP = {"EURUSD": 0.0001, "GBPUSD": 0.0001, "AUDUSD": 0.0001, "NZDUSD": 0.0001,
         "USDCAD": 0.0001, "USDJPY": 0.01, "GBPJPY": 0.01, "EURJPY": 0.01,
