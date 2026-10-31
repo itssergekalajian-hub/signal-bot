@@ -384,7 +384,7 @@ async def _health_message() -> str:
     dest = ", ".join(_names.get(t.strip(), t.strip())
                      for t in (config.FX_ALERT_TARGET or "owner").split(",") if t.strip())
     lines += ["\n*Chart reading*",
-              f"   Gemini `{config.GEMINI_MODEL}` {gkey}",
+              f"   Gemini `{config.GEMINI_MODEL}` {gkey}  ·  {len(_gemini_keys())} key(s)",
               "\n*Alerts*",
               f"   → {dest}  ·  within {config.FX_NEAR_PIPS:g} pips",
               f"   mode: {mode}  ·  checks every {config.FX_POLL_SEC}s",

@@ -184,7 +184,10 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
         seen.add(key)
         outcome, R = replay(inst, bias, {"low": lo, "high": hi}, candles)
         if outcome in ("win", "loss", "be"):
-            results.append((inst, bias, outcome, R))
+            pip = fn._PIP.get(inst, 0.0001)
+            width = (hi - lo) / pip
+            hour = datetime.utcfromtimestamp(post_ts).hour
+            results.append((inst, bias, outcome, R, hour, width))
 
     setups = seen  # for the count in the report
     closed = [r for r in results]
@@ -199,7 +202,8 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
 
     # per-instrument breakdown
     per = {}
-    for inst, bias, outcome, R in closed:
+    for r in closed:
+        inst, R = r[0], r[3]
         d = per.setdefault(inst, [0, 0, 0, 0.0])  # wins, losses, be, netR
         if R > 0:
             d[0] += 1
@@ -209,6 +213,28 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
             d[2] += 1
         d[3] += R
 
+    def _bucket(name_fn):
+        b = {}
+        for r in closed:
+            k = name_fn(r)
+            d = b.setdefault(k, [0, 0, 0.0])   # trades, wins, netR
+            d[0] += 1
+            d[1] += 1 if r[3] > 0 else 0
+            d[2] += r[3]
+        return b
+
+    def _session(hour):
+        if 7 <= hour < 12:
+            return "London"
+        if 12 <= hour < 21:
+            return "NewYork"
+        return "Asia/other"
+
+    med_w = sorted(r[5] for r in closed)[len(closed) // 2] if closed else 0
+    by_sess = _bucket(lambda r: _session(r[4]))
+    by_dir = _bucket(lambda r: r[1])
+    by_w = _bucket(lambda r: "tight" if r[5] <= med_w else "wide")
+
     lines = [f"📊 *Historical backtest* — last {days} days of narratives",
              f"charts read: {charts} · setups: {len(setups)} · resolved: {len(closed)}",
              f"\n✅ wins {len(wins)} · 🛑 losses {len(losses)} · ➖ BE {len(be)}",
@@ -217,6 +243,18 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
              "\n*By instrument*"]
     for inst, (w, l, b, nr) in per.items():
         lines.append(f"  {inst}: {w}W/{l}L/{b}BE · {nr:+.1f}R")
+
+    def _fmt_bucket(title, b):
+        out = [f"\n*By {title}*"]
+        for k, (n, w, nr) in sorted(b.items(), key=lambda kv: kv[1][2]):
+            out.append(f"  {k}: {w}/{n} win · {nr:+.1f}R")
+        return out
+
+    lines += _fmt_bucket("session", by_sess)
+    lines += _fmt_bucket("direction", by_dir)
+    lines += _fmt_bucket(f"zone (≤{med_w:.0f}p=tight)", by_w)
+    lines.append("\n💡 _The bucket with the worst R is where the losses cluster — "
+                 "a candidate filter to test (not auto-applied)._")
     lines.append("\n_Rules: confirmation entry, stop beyond the zone, "
                  f"{config.PAPER_TP_R:g}R target, BE at +{config.PAPER_BE_AT_R:g}R. "
                  "Conservative within each candle._")
