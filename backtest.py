@@ -118,8 +118,10 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
     from telethon.tl.types import PeerChannel
     now = time.time()
 
-    # 1) collect setups from the channel history, deduped by zone (earliest wins)
-    setups = {}  # (inst, round(lo,5), round(hi,5)) -> (inst, bias, label, post_ts, lo, hi)
+    # 1) collect ONE setup per narrative post: the single best (nearest-price,
+    #    correct-side) zone. This mirrors the channel's selectivity instead of
+    #    firing on every drawn level.
+    posts = []  # (inst, bias, post_ts, [ (label, lo, hi) ])
     charts = 0
     async for msg in user_client.iter_messages(
             PeerChannel(config.FX_CHANNEL_ID),
@@ -137,37 +139,57 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
         if not zones:
             continue
         charts += 1
-        post_ts = msg.date.timestamp()
+        clean = []
         for z in zones:
             try:
                 lo, hi = sorted((float(z["low"]), float(z["high"])))
             except (KeyError, TypeError, ValueError):
                 continue
-            key = (inst, round(lo, 5), round(hi, 5))
-            prev = setups.get(key)
-            if prev is None or post_ts < prev[3]:   # keep the earliest sighting
-                setups[key] = (inst, bias, z.get("label", "AOI"), post_ts, lo, hi)
+            clean.append((z.get("label", "AOI"), lo, hi))
+        if clean:
+            posts.append((inst, bias, msg.date.timestamp(), clean))
         if charts >= max_charts:
             break
         await asyncio.sleep(0.8)
 
-    if not setups:
+    if not posts:
         return "Backtest: couldn't read any past charts (Gemini quota?). Try again."
 
-    # 2) replay each setup on historical candles
+    # 2) for each post, pick the single best valid zone and replay it; dedup so
+    #    the same area of interest isn't traded twice.
     results = []  # (inst, bias, outcome, R)
-    for (inst, bias, label, post_ts, lo, hi) in setups.values():
+    seen = set()
+    for (inst, bias, post_ts, clean) in posts:
         end_ts = min(now, post_ts + days * 86400)
         candles = await asyncio.to_thread(hist_candles, inst, post_ts, end_ts)
         if not candles:
             continue
+        price0 = candles[0][1]
+        bull = bias == "bullish"
+        # keep only zones that are entries (correct side), then the nearest one
+        valid = []
+        for (label, lo, hi) in clean:
+            if bull and price0 < lo:        # zone above price = target, not entry
+                continue
+            if (not bull) and price0 > hi:  # zone below price = target
+                continue
+            dist = 0.0 if lo <= price0 <= hi else min(abs(price0 - lo), abs(price0 - hi))
+            valid.append((dist, label, lo, hi))
+        if not valid:
+            continue
+        _, label, lo, hi = min(valid)
+        key = (inst, round(lo, 5), round(hi, 5))
+        if key in seen:
+            continue
+        seen.add(key)
         outcome, R = replay(inst, bias, {"low": lo, "high": hi}, candles)
         if outcome in ("win", "loss", "be"):
             results.append((inst, bias, outcome, R))
 
+    setups = seen  # for the count in the report
     closed = [r for r in results]
     if not closed:
-        return (f"Backtest read {charts} charts / {len(setups)} setups, but none "
+        return (f"Backtest read {charts} charts / {len(seen)} setups, but none "
                 "resolved on history yet (price hasn't reached them, or too recent).")
     wins = [r for r in closed if r[3] > 0]
     losses = [r for r in closed if r[3] < 0]
