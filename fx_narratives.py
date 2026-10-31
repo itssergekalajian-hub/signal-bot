@@ -129,10 +129,16 @@ def _gemini_keys() -> list[str]:
     return [k.strip() for k in (config.GEMINI_API_KEY or "").split(",") if k.strip()]
 
 
-def _gemini_call(body: dict):
-    """Try each (key, model) until one returns 200. Returns parsed JSON or None."""
+def _gemini_call(body: dict, models: list[str] | None = None):
+    """Try each (key, model) until one returns 200. Returns parsed JSON or None.
+
+    `models` pins the model list (e.g. a single fixed model for consistent trade
+    decisions); default rotates GEMINI_MODELS for quota-resilient chart reading.
+    Keys are always rotated for quota.
+    """
+    use_models = models if models else _gemini_models()
     for key in _gemini_keys():
-        for model in _gemini_models():
+        for model in use_models:
             url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                    f"{model}:generateContent?key={key}")
             try:

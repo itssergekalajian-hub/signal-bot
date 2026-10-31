@@ -49,7 +49,7 @@ def judge_setup(image_bytes: bytes, mime: str, instrument: str,
         ]}],
         "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
-    j = _gemini_call(body)
+    j = _gemini_call(body, models=[config.AI_MODEL])
     if not j:
         return None
     try:

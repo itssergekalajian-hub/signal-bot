@@ -71,3 +71,7 @@ PAPER_ALERT_TARGET = os.getenv("PAPER_ALERT_TARGET", "owner")
 
 # AI-trader: minimum confidence (1-10) for the AI analyst to take a setup.
 AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "7"))
+
+# The SINGLE fixed model used for trade DECISIONS (AI judge), so the "opinion"
+# is consistent run to run. Chart READING for alerts still rotates GEMINI_MODELS.
+AI_MODEL = os.getenv("AI_MODEL", "gemini-3.6-flash")
