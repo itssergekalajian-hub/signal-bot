@@ -59,6 +59,15 @@ def replay(instrument: str, bias: str, zone: dict, candles):
     state = "watching"
     entry = sl = tp = None
     be = False
+    # Only trade zones that are actual ENTRIES, not targets: a bullish setup buys
+    # a demand zone at/below price; a bearish setup sells a supply zone at/above
+    # price. A zone on the wrong side is a target the channel wouldn't enter.
+    if candles:
+        price0 = candles[0][1]
+        if bull and price0 < lo:
+            return "skip", None
+        if (not bull) and price0 > hi:
+            return "skip", None
     for (_t, _o, h, l, _c) in candles:
         if state == "watching":
             if l <= hi and h >= lo:            # candle overlapped the zone = tap
