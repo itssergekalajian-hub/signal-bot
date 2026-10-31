@@ -39,6 +39,9 @@ FX_ALERT_TOPIC      = int(os.getenv("FX_ALERT_TOPIC", str(FX_NARRATIVES_TOPIC)))
 FX_NEAR_PIPS        = float(os.getenv("FX_NEAR_PIPS", "15"))
 FX_POLL_SEC         = int(os.getenv("FX_POLL_SEC", "60"))
 FX_ZONES_FILE       = os.getenv("FX_ZONES_FILE", "fx_zones.json")
+# Instruments the bot watches/trades (comma-separated). DXY stays as a bias
+# indicator only (never traded).
+FX_INSTRUMENTS      = os.getenv("FX_INSTRUMENTS", "EURUSD,GBPUSD,DXY,XAUUSD,AUDUSD")
 # Fully automatic: when true, levels Gemini reads are locked in and watched
 # with no confirm tap (the bot just tells you what it locked). false = you tap
 # ✅ Confirm on each proposal first.

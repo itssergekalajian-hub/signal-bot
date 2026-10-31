@@ -31,13 +31,26 @@ import config
 
 # instrument shorthand (as used in the captions) -> canonical symbol
 _SHORT = {"EU": "EURUSD", "EURUSD": "EURUSD", "GU": "GBPUSD", "GBPUSD": "GBPUSD",
-          "DXY": "DXY", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GOLD": "XAUUSD"}
-_INSTRUMENTS = ["EURUSD", "GBPUSD", "DXY", "XAUUSD"]
+          "DXY": "DXY", "XAU": "XAUUSD", "XAUUSD": "XAUUSD", "GOLD": "XAUUSD",
+          "AU": "AUDUSD", "AUD": "AUDUSD", "AUDUSD": "AUDUSD",
+          "UJ": "USDJPY", "USDJPY": "USDJPY", "GJ": "GBPJPY", "GBPJPY": "GBPJPY",
+          "EJ": "EURJPY", "EURJPY": "EURJPY", "UC": "USDCAD", "USDCAD": "USDCAD",
+          "NU": "NZDUSD", "NZDUSD": "NZDUSD", "NZD": "NZDUSD",
+          "NAS": "NAS100", "NAS100": "NAS100", "US100": "NAS100",
+          "SPX": "SPX500", "SP500": "SPX500", "US500": "SPX500"}
+# Instruments the bot actually trades/watches (override with FX_INSTRUMENTS).
+_INSTRUMENTS = [i.strip() for i in getattr(config, "FX_INSTRUMENTS",
+               "EURUSD,GBPUSD,DXY,XAUUSD,AUDUSD").split(",") if i.strip()]
 # one pip, per instrument (for the "within N pips" test)
-_PIP = {"EURUSD": 0.0001, "GBPUSD": 0.0001, "XAUUSD": 0.1, "DXY": 0.01}
+_PIP = {"EURUSD": 0.0001, "GBPUSD": 0.0001, "AUDUSD": 0.0001, "NZDUSD": 0.0001,
+        "USDCAD": 0.0001, "USDJPY": 0.01, "GBPJPY": 0.01, "EURJPY": 0.01,
+        "XAUUSD": 0.1, "DXY": 0.01, "NAS100": 1.0, "SPX500": 1.0}
 # Yahoo Finance symbols (tried in order; first that returns a price wins)
-_YSYM = {"EURUSD": ["EURUSD=X"], "GBPUSD": ["GBPUSD=X"],
-         "XAUUSD": ["XAUUSD=X", "GC=F"], "DXY": ["DX-Y.NYB", "DX=F"]}
+_YSYM = {"EURUSD": ["EURUSD=X"], "GBPUSD": ["GBPUSD=X"], "AUDUSD": ["AUDUSD=X"],
+         "NZDUSD": ["NZDUSD=X"], "USDCAD": ["USDCAD=X"], "USDJPY": ["USDJPY=X"],
+         "GBPJPY": ["GBPJPY=X"], "EURJPY": ["EURJPY=X"],
+         "XAUUSD": ["XAUUSD=X", "GC=F"], "DXY": ["DX-Y.NYB", "DX=F"],
+         "NAS100": ["^NDX", "NQ=F"], "SPX500": ["^GSPC", "ES=F"]}
 
 _pending: dict[str, dict] = {}          # proposal id -> {instrument, bias, zones}
 _awaiting_edit: dict[int, str] = {}     # owner id -> proposal id being edited
@@ -447,6 +460,13 @@ def register(user_client, bot_client, notify):
                 lines.append(f"📍 {z.get('label', 'AOI')}:  `{_range_text(instrument, z)}`")
             lines.append(f"\n🔔 I'll alert within {config.FX_NEAR_PIPS:g} pips, and again when "
                          f"price reaches it (then it clears itself).")
+            try:
+                import news
+                nl = await asyncio.to_thread(news.context_line, instrument, 240)
+                if nl:
+                    lines.append(nl)
+            except Exception:  # noqa: BLE001
+                pass
             lines.append(f"_Wrong read? `/fxclear {instrument}` to drop these._")
             await deliver(bot_client, notify, "\n".join(lines))
         else:
@@ -575,6 +595,40 @@ def register(user_client, bot_client, notify):
             return
         await event.reply(f"✅ Locked in {done} recent chart(s). Use /zones to see them."
                           if done else "No readable charts found in the recent posts.")
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxassets"))
+    async def _on_assets(event):
+        from telethon.tl.types import PeerChannel
+        from collections import Counter
+        await event.reply("🔎 Counting which assets they post about…")
+        ctr = Counter()
+        async for msg in user_client.iter_messages(
+                PeerChannel(config.FX_CHANNEL_ID),
+                reply_to=config.FX_NARRATIVES_TOPIC, limit=1500):
+            inst, _ = _instrument_of(msg.message or "")
+            if inst:
+                ctr[inst] += 1
+        if not ctr:
+            await event.reply("No instruments found in the Narratives topic.")
+            return
+        lines = ["📋 *Assets they post about* (Narratives)"]
+        for inst, c in ctr.most_common():
+            mark = "✅ watched" if inst in _INSTRUMENTS else "➕ NOT watched"
+            lines.append(f"  {inst}: {c}  · {mark}")
+        missing = [i for i in ctr if i not in _INSTRUMENTS and i != "DXY"]
+        if missing:
+            lines.append(f"\n⚠️ Not watched yet: {', '.join(missing)}")
+            lines.append("_Add them on the server:_ "
+                         "`echo 'FX_INSTRUMENTS=EURUSD,GBPUSD,DXY,XAUUSD,AUDUSD,"
+                         + ",".join(missing) + "' >> .env` then restart.")
+        else:
+            lines.append("\n✅ The bot is watching every asset they trade.")
+        await event.reply("\n".join(lines))
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/news"))
+    async def _on_news(event):
+        import news
+        await event.reply(await asyncio.to_thread(news.news_message))
 
 
     # 2) confirm / discard buttons
