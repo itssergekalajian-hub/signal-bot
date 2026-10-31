@@ -730,6 +730,20 @@ def register(user_client, bot_client, notify):
         paper_trader.clear()
         await event.reply("🧹 Paper-trading ledger reset.")
 
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxaibacktest"))
+    async def _on_ai_backtest(event):
+        import backtest
+        parts = event.raw_text.split()
+        days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 14
+        m = await event.reply("🤖 AI-trader backtest — judging every past setup like a "
+                              "conservative trader. This takes a few minutes.")
+        try:
+            txt = await backtest.run_ai_backtest(user_client, days=days)
+        except Exception as e:  # noqa: BLE001
+            await m.edit(f"AI backtest failed: {e}")
+            return
+        await m.edit(txt)
+
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxbacktest"))
     async def _on_backtest(event):
         import backtest

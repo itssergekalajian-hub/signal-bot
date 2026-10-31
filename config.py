@@ -68,3 +68,6 @@ PAPER_POLL_SEC        = int(os.getenv("PAPER_POLL_SEC", "60"))
 # area-of-interest alerts. Default "owner" = you only. Same format as
 # FX_ALERT_TARGET (owner / channel / id / @username, comma-separated).
 PAPER_ALERT_TARGET = os.getenv("PAPER_ALERT_TARGET", "owner")
+
+# AI-trader: minimum confidence (1-10) for the AI analyst to take a setup.
+AI_MIN_CONFIDENCE = float(os.getenv("AI_MIN_CONFIDENCE", "7"))

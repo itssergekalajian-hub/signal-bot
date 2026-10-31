@@ -262,3 +262,79 @@ async def run_backtest(user_client, days: int = 14, max_charts: int = 50) -> str
                  f"{config.PAPER_TP_R:g}R target, BE at +{config.PAPER_BE_AT_R:g}R. "
                  "Conservative within each candle._")
     return "\n".join(lines)
+
+
+async def run_ai_backtest(user_client, days: int = 14, max_charts: int = 50,
+                          min_conf: float = None) -> str:
+    """Let the AI trader judge each past narrative; replay only the ones it takes."""
+    from telethon.tl.types import PeerChannel
+    import analyst
+    if min_conf is None:
+        min_conf = getattr(config, "AI_MIN_CONFIDENCE", 7)
+    now = time.time()
+    results = []           # (inst, R, confidence)
+    charts = taken = skipped = 0
+    async for msg in user_client.iter_messages(
+            PeerChannel(config.FX_CHANNEL_ID),
+            reply_to=config.FX_NARRATIVES_TOPIC, limit=max_charts * 4):
+        if not msg.photo:
+            continue
+        inst, _bias = fn._instrument_of(msg.message or "")
+        if inst not in fn._INSTRUMENTS or inst == "DXY":
+            continue
+        try:
+            blob = await msg.download_media(file=bytes)
+        except Exception:  # noqa: BLE001
+            continue
+        charts += 1
+        post_ts = msg.date.timestamp()
+        candles = await asyncio.to_thread(hist_candles, inst, post_ts,
+                                          min(now, post_ts + days * 86400))
+        if not candles:
+            if charts >= max_charts:
+                break
+            continue
+        price0 = candles[0][1]
+        v = await asyncio.to_thread(analyst.judge_setup, blob, "image/jpeg", inst,
+                                    msg.message or "", price0)
+        await asyncio.sleep(0.8)
+        if not v:
+            continue
+        if not v.get("take") or v.get("confidence", 0) < min_conf:
+            skipped += 1
+            if charts >= max_charts:
+                break
+            continue
+        R = analyst.replay_ai(candles, v["direction"], v["entry"], v["stop"], v["target"])
+        if R is not None:
+            taken += 1
+            results.append((inst, R, v["confidence"]))
+        if charts >= max_charts:
+            break
+
+    if not results:
+        return (f"🤖 AI backtest: read {charts} charts, AI *took* {taken} and skipped "
+                f"{skipped}, but none resolved on history yet. (It's being very "
+                "selective — that's the point.)")
+    wins = [r for r in results if r[1] > 0]
+    losses = [r for r in results if r[1] < 0]
+    netR = sum(r[1] for r in results)
+    wr = len(wins) / len(results) * 100
+    avgR = netR / len(results)
+    per = {}
+    for inst, R, _c in results:
+        d = per.setdefault(inst, [0, 0, 0.0])
+        d[0] += 1 if R > 0 else 0
+        d[1] += 1
+        d[2] += R
+    lines = [f"🤖 *AI-trader backtest* — last {days}d (confidence ≥ {min_conf:g})",
+             f"charts: {charts} · AI took: {len(results)} · skipped: {skipped}",
+             f"\n✅ wins {len(wins)} · 🛑 losses {len(losses)} · win rate {wr:.0f}%",
+             f"*net {netR:+.1f}R* · avg {avgR:+.2f}R/trade",
+             "\n*By instrument*"]
+    for inst, (w, n, nr) in per.items():
+        lines.append(f"  {inst}: {w}/{n} win · {nr:+.1f}R")
+    lines.append("\n_The AI judged each setup like a conservative trader (takes only "
+                 "A+, sets its own entry/stop/target). Point-in-time — still validate "
+                 "forward before trusting it._")
+    return "\n".join(lines)
