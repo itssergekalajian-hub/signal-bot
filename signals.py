@@ -36,6 +36,7 @@ async def _register_commands() -> None:
                 ("zones", "Your live watchlist"),
                 ("pstats", "Paper-trading scorecard"),
                 ("ptrades", "Paper trades (open + recent)"),
+                ("fxbacktest", "Backtest the channel's history"),
                 ("fxlast", "Re-read the last N charts"),
                 ("fxclear", "Remove zones (id / pair / all)"),
                 ("fxtest", "System status"),

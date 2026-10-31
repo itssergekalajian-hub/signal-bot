@@ -639,6 +639,20 @@ def register(user_client, bot_client, notify):
         paper_trader.clear()
         await event.reply("🧹 Paper-trading ledger reset.")
 
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxbacktest"))
+    async def _on_backtest(event):
+        import backtest
+        parts = event.raw_text.split()
+        days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 14
+        m = await event.reply("📊 Backtesting the channel's history… this reads every "
+                              "past chart, give it a minute or two.")
+        try:
+            txt = await backtest.run_backtest(user_client, days=days)
+        except Exception as e:  # noqa: BLE001
+            await m.edit(f"Backtest failed: {e}")
+            return
+        await m.edit(txt)
+
     # ── FX menu ────────────────────────────────────────────────────────
     def _menu_markup():
         return [[Button.inline("🔁 Scan channel", b"fxmenu:sync"),
