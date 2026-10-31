@@ -47,7 +47,7 @@ def judge_setup(image_bytes: bytes, mime: str, instrument: str,
             {"text": prompt},
             {"inline_data": {"mime_type": mime, "data": base64.b64encode(image_bytes).decode()}},
         ]}],
-        "generationConfig": {"temperature": 0.2, "response_mime_type": "application/json"},
+        "generationConfig": {"temperature": 0, "response_mime_type": "application/json"},
     }
     j = _gemini_call(body)
     if not j:
