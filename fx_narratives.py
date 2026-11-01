@@ -506,6 +506,16 @@ def register(user_client, bot_client, notify):
             return
         if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
             return
+        # Copy-trader: if they announce taking a trade, mirror it at live price.
+        txt = event.message.message or ""
+        try:
+            import copytrade
+            if config.COPY_ENABLED and copytrade.has_taken_signal(txt):
+                inst, bias = _instrument_of(txt)
+                if inst in _INSTRUMENTS and inst != "DXY" and bias in ("bullish", "bearish"):
+                    await copytrade.open_from_signal(bot_client, notify, inst, bias)
+        except Exception:  # noqa: BLE001
+            pass
         await _ingest(event.message)
 
     # 1b) backfill: process the last charts already posted in the topic
@@ -655,6 +665,16 @@ def register(user_client, bot_client, notify):
     async def _on_news(event):
         import news
         await event.reply(await asyncio.to_thread(news.news_message))
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/copystats"))
+    async def _on_copystats(event):
+        import copytrade
+        await event.reply(copytrade.stats_message())
+
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/copytrades"))
+    async def _on_copytrades(event):
+        import copytrade
+        await event.reply(copytrade.trades_message())
 
     @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxtheirs"))
     async def _on_theirs(event):

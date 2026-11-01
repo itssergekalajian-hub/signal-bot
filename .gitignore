@@ -32,3 +32,7 @@ fx_zones.json.tmp
 # Paper trading ledger
 paper_trades.json
 paper_trades.json.tmp
+
+# Copy-trade ledger
+copy_trades.json
+copy_trades.json.tmp

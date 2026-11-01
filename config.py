@@ -78,3 +78,10 @@ AI_MODEL = os.getenv("AI_MODEL", "gemini-flash-lite-latest")
 
 # Channel topic for their weekly backtest/results
 FX_BACKTEST_TOPIC = int(os.getenv("FX_BACKTEST_TOPIC", "7"))
+
+# ── Copy-trader: mirror the trades the channel actually takes (forward) ─
+COPY_ENABLED   = _b("COPY_ENABLED", True)
+COPY_STOP_PIPS = float(os.getenv("COPY_STOP_PIPS", "20"))   # default stop distance
+COPY_TP_R      = float(os.getenv("COPY_TP_R", "3"))         # default target in R
+COPY_FILE      = os.getenv("COPY_FILE", "copy_trades.json")
+COPY_POLL_SEC  = int(os.getenv("COPY_POLL_SEC", "60"))

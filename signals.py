@@ -75,6 +75,7 @@ async def main():
         bot_client.run_until_disconnected(),
         fx_narratives.run(bot_client, _notify),
         _paper_loop(),
+        _copy_loop(),
     )
 
 
@@ -83,6 +84,13 @@ async def _paper_loop():
         return
     import paper_trader
     await paper_trader.run(bot_client, _notify)
+
+
+async def _copy_loop():
+    if not getattr(config, "COPY_ENABLED", False):
+        return
+    import copytrade
+    await copytrade.run(bot_client, _notify)
 
 
 if __name__ == "__main__":
