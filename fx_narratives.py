@@ -656,6 +656,18 @@ def register(user_client, bot_client, notify):
         import news
         await event.reply(await asyncio.to_thread(news.news_message))
 
+    @bot_client.on(events.NewMessage(from_users=owner, pattern=r"^/fxtheirs"))
+    async def _on_theirs(event):
+        import theirs
+        m = await event.reply("📒 Reading the channel to extract their ACTUAL trades "
+                              "(taken / skipped / outcomes)…")
+        try:
+            txt = await theirs.analyze(user_client, days=30)
+        except Exception as e:  # noqa: BLE001
+            await m.edit(f"Failed: {e}")
+            return
+        await m.edit(txt)
+
 
     # 2) confirm / discard buttons
     @bot_client.on(events.CallbackQuery(pattern=rb"^fx(ok|no):"))
