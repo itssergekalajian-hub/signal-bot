@@ -85,3 +85,11 @@ COPY_STOP_PIPS = float(os.getenv("COPY_STOP_PIPS", "20"))   # default stop dista
 COPY_TP_R      = float(os.getenv("COPY_TP_R", "3"))         # default target in R
 COPY_FILE      = os.getenv("COPY_FILE", "copy_trades.json")
 COPY_POLL_SEC  = int(os.getenv("COPY_POLL_SEC", "60"))
+
+# Style guidance injected into the AI judge so it trades like THIS team
+# (derived from their actual trade log). Set "" to use generic judgment.
+AI_STYLE = os.getenv("AI_STYLE",
+    "This team trades mostly SHORTS at FVG/Order-Block supply zones aligned with "
+    "US-dollar (DXY) strength, mainly GBPUSD, XAUUSD and EURUSD, targeting 2-7R "
+    "with tight stops, and SKIPS any setup without a clear lower-timeframe "
+    "confirmation. Favour shorts into supply unless the chart clearly confirms bullish.")

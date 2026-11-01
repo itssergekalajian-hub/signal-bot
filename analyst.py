@@ -29,6 +29,7 @@ def judge_setup(image_bytes: bytes, mime: str, instrument: str,
         f"Analyst's note: \"{(narrative or '').strip()[:500]}\"\n"
         f"Current price: {px}.\n"
         + (f"Upcoming news: {news}\n" if news else "")
+        + (f"Trade in THIS team's style: {config.AI_STYLE}\n" if getattr(config, "AI_STYLE", "") else "")
         + "Judge this ONLY as a disciplined trader who takes FEW, A+ trades and skips "
         "the rest — most setups should be SKIPPED. Take it ONLY if: price is reacting "
         "at a clear Fair Value Gap or Order Block in the direction of the higher-"
