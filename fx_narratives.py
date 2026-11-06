@@ -304,18 +304,8 @@ def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bo
     # If bearish and price is already below the zone low, the target is already hit
     if bias == "bearish" and p < lo:
         return False
-    def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bool:
-    """Returns False if price has already crossed through this level in the bias direction."""
-    if not p:
-        return True
-    lo, hi = sorted((float(z["low"]), float(z["high"])))
-    if lo <= p <= hi:
-        return False
-    if bias == "bullish" and p > hi:
-        return False
-    if bias == "bearish" and p < lo:
-        return False
     return True
+
 
 def _limit_zones(instrument: str, p, zones: list[dict]) -> list[dict]:
     """Keep only the FX_MAX_ZONES zones nearest current price (dedup first)."""
@@ -332,11 +322,6 @@ def _limit_zones(instrument: str, p, zones: list[dict]) -> list[dict]:
         uniq.append(z)
     if not p or len(uniq) <= config.FX_MAX_ZONES:
         return uniq
-
-    def _d(z):
-        lo, hi = sorted((float(z["low"]), float(z["high"])))
-        return 0.0 if lo <= p <= hi else min(abs(p - lo), abs(p - hi))
-    return sorted(uniq, key=_d)[:config.FX_MAX_ZONES]
 
     def _d(z):
         lo, hi = sorted((float(z["low"]), float(z["high"])))
@@ -544,7 +529,6 @@ def register(user_client, bot_client, notify):
 
     # 1) new chart in the Narratives topic (live)
     @user_client.on(events.NewMessage)
-    async def _on_post(@user_client.on(events.NewMessage)
     async def _on_post(event):
         if event.chat_id != chan_chat_id:
             return
@@ -553,12 +537,6 @@ def register(user_client, bot_client, notify):
         if event.message.id in _seen_msg_ids:
             return
         _seen_msg_ids.add(event.message.id)
-        # Proceed with ingest...
-        await _ingest(event.message):
-        if event.chat_id != chan_chat_id:
-            return
-        if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
-            return
         # Copy-trader: if they announce taking a trade, mirror it at live price.
         txt = event.message.message or ""
         try:
