@@ -315,12 +315,10 @@ def _near_msg(z: dict, p: float) -> str:
 
 def _reached_msg(z: dict, p: float) -> str:
     ins = z["instrument"]
-    lines = [f"🎯 *{ins} — reached area of interest*",
-             f"📍 {z['label']}:  `{_range_text(ins, z)}`",
-             f"💵 Tapped at:  `{_fmt(ins, p)}`"]
-    if z.get("bias") and z["bias"] != "?":
-        lines.append(f"{_bias_emoji(z['bias'])} Bias:  {z['bias']}")
-    lines.append("✅ _Target hit — zone cleared automatically._")
+    lines = [f"🎯 *{ins} — area of interest cleared*",
+             f"📍 {z['label']}: `{_range_text(ins, z)}`",
+             f"💵 Tapped at: `{_fmt(ins, p)}`",
+             "✅ _Target reached — trade cleared automatically._"]
     return "\n".join(lines)
 
 
