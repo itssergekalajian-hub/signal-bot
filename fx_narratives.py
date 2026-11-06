@@ -93,13 +93,27 @@ def _save(zones: list[dict]) -> None:
 
 
 def _add_zones(instrument: str, bias: str, zones: list[dict]) -> int:
+    """Replaces old zones for this instrument with the new narrative's targets."""
     cur = _load()
+    # Drop previous zones for this instrument so only the latest narrative is watched
+    cur = [z for z in cur if z.get("instrument") != instrument]
     n = 0
+    p = price(instrument)
     for z in zones:
         lo, hi = sorted((float(z["low"]), float(z["high"])))
-        cur.append({"id": secrets.token_hex(3), "instrument": instrument, "bias": bias,
-                    "label": str(z.get("label") or "AOI"), "low": lo, "high": hi,
-                    "near_notified": False, "created": time.time()})
+        # Only add zones that are actually ahead of price
+        if not _is_valid_target(instrument, p, z, bias):
+            continue
+        cur.append({
+            "id": secrets.token_hex(3),
+            "instrument": instrument,
+            "bias": bias,
+            "label": str(z.get("label") or "AOI"),
+            "low": lo,
+            "high": hi,
+            "near_notified": False,
+            "created": time.time(),
+        })
         n += 1
     _save(cur)
     return n
@@ -276,10 +290,21 @@ def _pips_away(instrument: str, p: float, z: dict) -> float:
     return min(abs(p - z["low"]), abs(p - z["high"])) / _PIP.get(instrument, 0.0001)
 
 
-def _limit_zones(instrument: str, p, zones: list[dict]) -> list[dict]:
-    """Keep only the FX_MAX_ZONES zones nearest current price (dedup first)."""
-    seen, uniq = set(), []
-    for z in zones:
+def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bool:
+    """Returns False if price has already crossed through this level in the bias direction."""
+    if not p:
+        return True
+    lo, hi = sorted((float(z["low"]), float(z["high"])))
+    # If price is currently inside the zone, it's immediately reached/cleared
+    if lo <= p <= hi:
+        return False
+    # If bullish and price is already above the zone high, the target is already hit
+    if bias == "bullish" and p > hi:
+        return False
+    # If bearish and price is already below the zone low, the target is already hit
+    if bias == "bearish" and p < lo:
+        return False
+    return True
         try:
             lo, hi = sorted((float(z["low"]), float(z["high"])))
         except (KeyError, TypeError, ValueError):
@@ -499,7 +524,17 @@ def register(user_client, bot_client, notify):
 
     # 1) new chart in the Narratives topic (live)
     @user_client.on(events.NewMessage)
+    async def _on_post(@user_client.on(events.NewMessage)
     async def _on_post(event):
+        if event.chat_id != chan_chat_id:
+            return
+        if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
+            return
+        if event.message.id in _seen_msg_ids:
+            return
+        _seen_msg_ids.add(event.message.id)
+        # Proceed with ingest...
+        await _ingest(event.message):
         if event.chat_id != chan_chat_id:
             return
         if _topic_of(event.message) != config.FX_NARRATIVES_TOPIC:
