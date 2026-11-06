@@ -304,7 +304,23 @@ def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bo
     # If bearish and price is already below the zone low, the target is already hit
     if bias == "bearish" and p < lo:
         return False
+    def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bool:
+    """Returns False if price has already crossed through this level in the bias direction."""
+    if not p:
+        return True
+    lo, hi = sorted((float(z["low"]), float(z["high"])))
+    if lo <= p <= hi:
+        return False
+    if bias == "bullish" and p > hi:
+        return False
+    if bias == "bearish" and p < lo:
+        return False
     return True
+
+def _limit_zones(instrument: str, p, zones: list[dict]) -> list[dict]:
+    """Keep only the FX_MAX_ZONES zones nearest current price (dedup first)."""
+    seen, uniq = set(), []
+    for z in zones:
         try:
             lo, hi = sorted((float(z["low"]), float(z["high"])))
         except (KeyError, TypeError, ValueError):
@@ -322,10 +338,14 @@ def _is_valid_target(instrument: str, p: float | None, z: dict, bias: str) -> bo
         return 0.0 if lo <= p <= hi else min(abs(p - lo), abs(p - hi))
     return sorted(uniq, key=_d)[:config.FX_MAX_ZONES]
 
+    def _d(z):
+        lo, hi = sorted((float(z["low"]), float(z["high"])))
+        return 0.0 if lo <= p <= hi else min(abs(p - lo), abs(p - hi))
+    return sorted(uniq, key=_d)[:config.FX_MAX_ZONES]
+
 
 def _bias_emoji(bias: str) -> str:
     return {"bullish": "📈", "bearish": "📉"}.get(bias, "🧭")
-
 
 def _near_msg(z: dict, p: float) -> str:
     ins = z["instrument"]
