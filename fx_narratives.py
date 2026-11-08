@@ -343,12 +343,32 @@ def _near_msg(z: dict, p: float) -> str:
     return "\n".join(lines)
 
 
-def _reached_msg(z: dict, p: float) -> str:
+def _reached_msg(z: dict, p: float, zones: list[dict] | None = None) -> str:
     ins = z["instrument"]
     lines = [f"🎯 *{ins} — area of interest cleared*",
              f"📍 {z['label']}: `{_range_text(ins, z)}`",
              f"💵 Tapped at: `{_fmt(ins, p)}`",
              "✅ _Target reached — trade cleared automatically._"]
+    bias = z.get("bias")
+    if bias in ("bullish", "bearish"):
+        ahead = []
+        for target in zones or []:
+            if (target.get("id") == z.get("id")
+                    or target.get("instrument") != ins
+                    or target.get("bias") != bias):
+                continue
+            target_price = float(target["low"] if bias == "bullish"
+                                 else target["high"])
+            if (bias == "bullish" and target_price > p) or (
+                    bias == "bearish" and target_price < p):
+                ahead.append((abs(target_price - p), target, target_price))
+        if ahead:
+            distance, target, target_price = min(ahead, key=lambda item: item[0])
+            pips = distance / _PIP.get(ins, 0.0001)
+            lines.append(
+                f"🎯 Next target: {target['label']} at "
+                f"{_fmt(ins, target_price)} ({pips:.0f} pips away) — "
+                "move SL to break-even.")
     return "\n".join(lines)
 
 
@@ -927,7 +947,7 @@ async def run(bot_client, notify):
                     near = config.FX_NEAR_PIPS * pip
                     # REACHED: price entered the zone -> alert + auto-clear (drop it)
                     if z["low"] <= p <= z["high"]:
-                        await _alert(_reached_msg(z, p))
+                        await _alert(_reached_msg(z, p, zones))
                         changed = True
                         continue  # not appended to kept = removed
                     dist = min(abs(p - z["low"]), abs(p - z["high"]))
